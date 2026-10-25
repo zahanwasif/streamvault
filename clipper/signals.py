@@ -3,6 +3,7 @@
   1. Loudness spikes: 1 s RMS windows; flags windows well above the source's own median
      (screams, hype, sudden laughter). Catches moments where nobody says anything quotable.
   2. Audio events: Scribe's (laughter) / (applause) / ... tags from the transcript.
+     Local (WhisperX) transcripts have none; signals.md says so.
   3. Chat bursts: messages per 30 s from the chat replay, when fetch.py found one.
 
 All times are in the downloaded video's own timeline (chat offsets are shifted by --section).
@@ -74,13 +75,14 @@ def loud_spikes(db: np.ndarray) -> tuple[float, list[tuple[float, float, float]]
     return median, events[:MAX_LOUD]
 
 
-def audio_events(transcript: Path) -> list[tuple[float, str]]:
+def audio_events(transcript: Path) -> tuple[str | None, list[tuple[float, str]]]:
+    """(engine, events). engine is None for Scribe transcripts, which don't record one."""
     if not transcript.exists():
-        return []
+        return None, []
     data = json.loads(transcript.read_text(encoding="utf-8"))
-    return [(w["start"], (w.get("text") or "").strip())
-            for w in data.get("words", [])
-            if w.get("type") == "audio_event" and w.get("start") is not None]
+    return data.get("engine"), [(w["start"], (w.get("text") or "").strip())
+                                for w in data.get("words", [])
+                                if w.get("type") == "audio_event" and w.get("start") is not None]
 
 
 def _offsets(node, out: list[float]) -> None:
@@ -144,10 +146,15 @@ def main() -> None:
     lines += [f"- {hms(a)} [{a:.0f}-{b:.0f}s] +{d:.1f} dB" for a, b, d in spikes] or ["- none"]
     lines.append("")
 
-    events = audio_events(edit_dir / "transcripts" / f"{video.stem}.json")
-    lines += [f"## Audio events from Scribe ({len(events)})", ""]
-    lines += [f"- {hms(t)} [{t:.1f}s] {txt}" for t, txt in events] or ["- none (or not transcribed yet)"]
-    lines.append("")
+    engine, events = audio_events(edit_dir / "transcripts" / f"{video.stem}.json")
+    if engine:
+        lines += ["## Audio events", "",
+                  f"- unavailable: transcribed locally ({engine}), which doesn't tag laughter or applause. "
+                  "Lean on loudness spikes and chat bursts instead.", ""]
+    else:
+        lines += [f"## Audio events from Scribe ({len(events)})", ""]
+        lines += [f"- {hms(t)} [{t:.1f}s] {txt}" for t, txt in events] or ["- none (or not transcribed yet)"]
+        lines.append("")
 
     chat = chat_times(info.get("chat") or [])
     lines += [f"## Chat bursts ({len(chat)} messages, {CHAT_BUCKET_S}s buckets)", ""]

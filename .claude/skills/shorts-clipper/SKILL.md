@@ -5,7 +5,7 @@ description: Turn a YouTube/Twitch URL or a folder of videos into finished 9:16 
 
 # Shorts clipper
 
-Fully automatic: URL or folder in, finished Shorts out. **Do not stop to ask for approval**: the user chose hands-off mode, which overrides video-use's "confirm strategy first" rule for this workflow. Stop only for hard failures you cannot fix: a download that needs login cookies, a Scribe 401, or silent audio.
+Fully automatic: URL or folder in, finished Shorts out. **Do not stop to ask for approval**: the user chose hands-off mode, which overrides video-use's "confirm strategy first" rule for this workflow. Stop only for hard failures you cannot fix: a download that needs login cookies, a Scribe 401, VoiceStudio not running, or silent audio.
 
 Built on video-use (`video-use/SKILL.md`). Its production rules still apply: cut on word boundaries, pad edges, subtitles last, never re-transcribe.
 
@@ -22,12 +22,12 @@ The user can override any of these in their message ("only 9s and up", "max 5").
 
 ## Commands
 
-Run everything from `C:\Users\zahan\OneDrive\Desktop\work\StreamVault` with the video-use environment:
+Run everything from the StreamVault repo root (the folder holding this `.claude/`) with the video-use environment:
 
 ```bash
 PY="uv run --project video-use python"
 $PY clipper/fetch.py <url | file | folder> [--section 1:00:00-2:30:00] [--cookies-from-browser chrome]
-$PY clipper/transcribe_long.py sources/<slug> [--language en]
+$PY clipper/transcribe_long.py sources/<slug> [--engine local|scribe] [--language en]
 $PY video-use/helpers/pack_transcripts.py --edit-dir sources/<slug>/edit
 $PY clipper/signals.py sources/<slug>
 $PY clipper/words.py sources/<slug> <start> <end>
@@ -43,7 +43,9 @@ $PY clipper/sheet.py shorts/<slug>
 - Download fails because the video is subscriber-only, members-only or age-gated: tell the user to rerun with `--cookies-from-browser chrome` (or their browser). Don't retry blindly.
 
 ### 2. Transcribe + signals
-Run `transcribe_long.py`, then `pack_transcripts.py`, then `signals.py`. Transcripts are cached; never delete them. Long VODs are chunked automatically. Scribe bills per audio hour, so mention the hours transcribed in the final report.
+Run `transcribe_long.py`, then `pack_transcripts.py`, then `signals.py`. Transcripts are cached; never delete them. Long VODs are chunked automatically.
+
+**Engine.** `--engine local` (the default, or whatever `CLIPPER_ASR` says) runs WhisperX on the GPU through VoiceStudio at `127.0.0.1:3900`: free, but no `(laughter)`/`(applause)` events, no speaker IDs, and fewer "um"s. `--engine scribe` uses ElevenLabs Scribe, which bills per audio hour. Use Scribe when the user asks for it, or when laughter detection matters more than cost. If VoiceStudio isn't answering, tell the user to start it; don't silently fall back to the paid engine. Report the engine and the audio hours transcribed in the final report (and the speed for local).
 
 ### 3. Find candidate moments
 Inputs: `edit/takes_packed.md` (phrases with `[start-end]` seconds) and `edit/signals.md` (loudness spikes, Scribe audio events, chat bursts).
@@ -137,7 +139,7 @@ Reply to the user with:
 - how many Shorts were made, from what
 - the folder path
 - the top 3 titles
-- Scribe hours used
+- transcription engine and audio hours (plus minutes per audio hour for local)
 - anything flagged
 
 Keep it short.
