@@ -1,0 +1,27 @@
+diff --git a/helpers/render.py b/helpers/render.py
+index b1efdcc..cff9f43 100644
+--- a/helpers/render.py
++++ b/helpers/render.py
+@@ -674,7 +674,8 @@ def build_final_composite(
+ 
+     # Subtitles LAST — Rule 1
+     if has_subs:
+-        subs_abs = str(subtitles_path.resolve()).replace(":", r"\:").replace("'", r"\'")
++        # as_posix: Windows backslashes are escape characters inside a filtergraph
++        subs_abs = subtitles_path.resolve().as_posix().replace(":", r"\:").replace("'", r"\'")
+         filter_parts.append(
+             f"{current}subtitles='{subs_abs}':force_style='{SUB_FORCE_STYLE}'[outv]"
+         )
+diff --git a/helpers/timeline_view.py b/helpers/timeline_view.py
+index 0b8f72a..bafc604 100644
+--- a/helpers/timeline_view.py
++++ b/helpers/timeline_view.py
+@@ -157,6 +157,8 @@ FONT_CANDIDATES = [
+     "/System/Library/Fonts/SFNSMono.ttf",
+     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+     "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
++    "C:/Windows/Fonts/consola.ttf",
++    "C:/Windows/Fonts/arial.ttf",
+ ]
+ 
+ 
