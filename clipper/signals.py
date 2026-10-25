@@ -26,9 +26,13 @@ import numpy as np
 SR = 8000           # plenty for loudness, halves memory vs 16 kHz
 WINDOW_S = 1.0
 SPIKE_DB = 10.0     # this far above the median counts as a spike
+# Compressed, always-loud streams never reach +10 dB; then the loudest 0.5% counts instead.
+SPIKE_PCT = 99.5
 MAX_LOUD = 40
 CHAT_BUCKET_S = 30
 MAX_CHAT = 30
+# Huge streams' chat is near-saturated and never doubles; then the busiest 5% counts instead.
+CHAT_PCT = 95
 
 
 def hms(t: float) -> str:
@@ -56,11 +60,17 @@ def loudness_db(video: Path) -> np.ndarray:
     return np.array(out)
 
 
-def loud_spikes(db: np.ndarray) -> tuple[float, list[tuple[float, float, float]]]:
-    """Merge consecutive above-threshold windows into events: (start, end, peak dB over median)."""
+def loud_spikes(db: np.ndarray) -> tuple[float, float, list[tuple[float, float, float]]]:
+    """Merge consecutive above-threshold windows into events: (start, end, peak dB over median).
+
+    Returns (median, threshold over median, events).
+    """
     voiced = db[db > -70]
     median = float(np.median(voiced)) if voiced.size else -40.0
-    hot = db > median + SPIKE_DB
+    rise = SPIKE_DB
+    if voiced.size and (voiced > median + SPIKE_DB).sum() == 0:
+        rise = float(np.percentile(voiced, SPIKE_PCT)) - median
+    hot = db > median + rise
     events, i = [], 0
     while i < len(db):
         if hot[i]:
@@ -72,7 +82,7 @@ def loud_spikes(db: np.ndarray) -> tuple[float, list[tuple[float, float, float]]
         else:
             i += 1
     events.sort(key=lambda e: -e[2])
-    return median, events[:MAX_LOUD]
+    return median, rise, events[:MAX_LOUD]
 
 
 def audio_events(transcript: Path) -> tuple[str | None, list[tuple[float, str]]]:
@@ -141,8 +151,10 @@ def main() -> None:
     lines = [f"# Signals: {info.get('title')}", ""]
 
     db = loudness_db(video)
-    median, spikes = loud_spikes(db)
-    lines += [f"## Loudness spikes (median {median:.1f} dBFS; +{SPIKE_DB:.0f} dB or more; loudest first)", ""]
+    median, rise, spikes = loud_spikes(db)
+    rule = (f"+{SPIKE_DB:.0f} dB or more" if rise == SPIKE_DB else
+            f"nothing reached +{SPIKE_DB:.0f} dB, so the loudest {100 - SPIKE_PCT:g}% (+{rise:.1f} dB): weak hints")
+    lines += [f"## Loudness spikes (median {median:.1f} dBFS; {rule}; loudest first)", ""]
     lines += [f"- {hms(a)} [{a:.0f}-{b:.0f}s] +{d:.1f} dB" for a, b, d in spikes] or ["- none"]
     lines.append("")
 
@@ -168,8 +180,13 @@ def main() -> None:
                 b = int(t // CHAT_BUCKET_S)
                 buckets[b] = buckets.get(b, 0) + 1
         mean = (sum(buckets.values()) / max(1, dur / CHAT_BUCKET_S)) if buckets else 0
-        top = sorted(((n, b) for b, n in buckets.items() if n >= 2 * mean), reverse=True)[:MAX_CHAT]
-        lines.append(f"Average {mean:.1f} msgs per bucket; listing buckets at 2x or more.")
+        cut, rule = 2 * mean, "listing buckets at 2x or more."
+        if buckets and max(buckets.values()) < cut:
+            cut = float(np.percentile(list(buckets.values()), CHAT_PCT))
+            rule = (f"none reached 2x (chat is near-saturated), so listing the busiest {100 - CHAT_PCT}% "
+                    f"({cut:.0f}+ msgs): weak hints.")
+        top = sorted(((n, b) for b, n in buckets.items() if n >= cut), reverse=True)[:MAX_CHAT]
+        lines.append(f"Average {mean:.1f} msgs per bucket; {rule}")
         lines += [f"- {hms(b * CHAT_BUCKET_S)} [{b * CHAT_BUCKET_S}-{(b + 1) * CHAT_BUCKET_S}s] "
                   f"{n} msgs ({n / mean:.1f}x)" for n, b in sorted(top, key=lambda x: x[1])] or ["- no bursts"]
     else:
