@@ -657,7 +657,7 @@ const CHECKS = {
   async workspace() {
     const st = workspace.status(settings.repoDir);
     const gb = freeSpace(settings.repoDir);
-    return { ...st, ok: st.ok && !pythonStale, dir: settings.repoDir, freeGb: gb,
+    return { ...st, dir: settings.repoDir, freeGb: gb,
       message: `${st.message}${gb != null ? ` · ${gb} GB free` : ''}` };
   },
   tools: () => setup.checkTools({ voicestudioUrl: settings.voicestudioUrl }),
@@ -685,13 +685,19 @@ const CHECKS = {
     if (!account && drive) account = await drive.me().catch(() => null);
     return { ok: true, message: `OneDrive: ${account ? account.email : 'connected'}`, ...oneDriveStatus(), secret };
   },
-  async github() {
-    const r = await github().check();
-    let session = null;
-    if (r.user) session = await github().secretInfo('YT_SESSION').catch(() => null);
-    const sessionMsg = session ? `YouTube session saved ${new Date(session.updated_at).toLocaleString()}` : 'YouTube session not saved yet';
-    return { ...r, ok: r.ok && !!session, session: session && session.updated_at,
-      message: r.ok ? `${r.message} · ${sessionMsg}` : r.message };
+  github: () => github().check(),
+  async youtube() {
+    const gh = github();
+    if (!gh.token || !settings.githubRepo) return { ok: false, message: 'save the GitHub token first (the session is stored on GitHub)' };
+    try {
+      const session = await gh.secretInfo('YT_SESSION');
+      return session
+        ? { ok: true, session: session.updated_at, message: `YouTube session saved ${new Date(session.updated_at).toLocaleString()}` }
+        : { ok: false, message: 'YouTube session not saved yet' };
+    } catch (e) {
+      return { ok: false, message: e.status === 403
+        ? 'the GitHub token can\'t read repository secrets: give it Secrets: Read and write' : e.message };
+    }
   },
   async youtubeApi() {
     const set = !!(settings.googleClientId && secrets.get('googleClientSecret'));
@@ -777,8 +783,8 @@ const ACTIONS = {
   'save': values => saveSetup(values),
   'microsoft.connect': () => connectOneDrive(),
   'microsoft.disconnect': () => disconnectOneDrive(),
-  'github.openChrome': () => setup.openChromeForYouTube(path.join(app.getPath('userData'), 'yt-session-profile')),
-  async 'github.capture'(_v, log) {
+  'youtube.openChrome': () => setup.openChromeForYouTube(path.join(app.getPath('userData'), 'yt-session-profile')),
+  async 'youtube.capture'(_v, log) {
     const { session, cookies } = await setup.captureYouTubeSession();
     log(`read ${cookies} YouTube/Google cookies`);
     const gh = github();

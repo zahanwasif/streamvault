@@ -37,19 +37,20 @@ The app opens on **Setup** until every required step is green. Each step checks 
 |---|---|---|---|
 | 1 | **Workspace folder** | Pick a drive with space (default `C:\StreamVault`) and click **Copy scripts**. | Copies `clipper/`, `uploader/`, the shorts-clipper skill and the patched `video-use` there. After each app update it refreshes them, and never touches `sources/`, `shorts/`, `inbox/` or `outbox/`. |
 | 2 | **Tools** | Click **Install** on anything missing. | Runs the official installer: winget for uv, ffmpeg, Node.js and Chrome; `uv tool install` for yt-dlp; Claude's and VoiceStudio's own scripts. It then re-reads PATH, so no restart is needed. |
-| 3 | **Python environment** | Click **Set up Python environment**. | Runs `uv sync` in `video-use` and links the video-use skill for Claude Code. |
+| 3 | **Python environment** | Click **Set up Python environment**. | Runs `uv sync` in `video-use` and links the video-use skill for Claude Code. A junction you made by hand to the same folder is kept. |
 | 4 | **Claude sign-in** | Click **Sign in to Claude**, finish in the browser, then Re-check. | Runs `claude auth login` in its own window. |
 | 5 | **VoiceStudio model** | In VoiceStudio, pick **WhisperX (large-v3)** on **CUDA**. Click **Allow 1-hour files**, restart VoiceStudio, then click **Test transcription**. | Sets `OMNIVOICE_ASR_TRANSCRIBE_TIMEOUT_S=3600` and sends 2 s of audio through the transcription endpoint. |
-| 6 | **n8n server** | Enter your n8n address and an API key (n8n → Settings → n8n API → Create an API key). | Tests the API and shows the OAuth redirect URL, which you need for steps 7 and 9. |
+| 6 | **n8n server** | Enter your n8n address and an API key (n8n → Settings → n8n API → Create an API key). | Tests the API and shows the OAuth redirect URL, which you need for steps 7 and 10. |
 | 7 | **Microsoft account (OneDrive)** | Register one Azure app, following the on-screen list: account types, the redirect URL from step 6, *Allow public client flows: Yes*, a client secret. Paste the client ID and secret, then **Connect OneDrive** and enter the code. | Signs in with a device code. Shorts then upload to your online OneDrive's `StreamVault/`. The secret is only passed to n8n. |
-| 8 | **GitHub + YouTube sign-in** | Create a fine-grained token for this repo only (Actions + Secrets: read and write) and save it. Then **1. Open Chrome**, sign in to YouTube Studio as the channel, and **2. Save YouTube session**. | Reads the youtube.com/google.com cookies from that Chrome window and stores them as the repo secret `YT_SESSION`. It also stores the token as `SECRETS_PAT`, so each run keeps the session fresh. |
-| 9 | **YouTube API** (optional) | Only after Google approves your API audit: a Google OAuth client (Web, the redirect URL from step 6, consent screen *In production*). | Adds the API path to the workflow. |
-| 10 | **n8n posting workflow** | Choose how often and the time zone, then **Create workflow in n8n**. Click **Connect OneDrive in n8n** (and YouTube, if set) and sign in there once. Then **Activate**. | Creates the credentials and the "StreamVault: post Shorts" workflow from the built-in template (your folder, repo, schedule). **Update** re-sends it after you change something. Shows recent runs. |
+| 8 | **GitHub** | Create a fine-grained token for this repo only (Actions + Secrets: read and write) and save it. | Checks the token, the repo and that `youtube-upload.yml` is on the default branch. |
+| 9 | **YouTube sign-in** | **1. Open Chrome**, sign in to YouTube Studio as the channel, then **2. Save YouTube session**. | Reads the youtube.com/google.com cookies from that Chrome window and stores them as the repo secret `YT_SESSION`. It also stores the token as `SECRETS_PAT`, so each run keeps the session fresh. |
+| 10 | **YouTube API** (optional) | Only after Google approves your API audit: a Google OAuth client (Web, the redirect URL from step 6, consent screen *In production*). | Adds the API path to the workflow. |
+| 11 | **n8n posting workflow** | Choose how often and the time zone, then **Create workflow in n8n**. Click **Connect OneDrive in n8n** (and YouTube, if set) and sign in there once. Then **Activate**. | Creates the credentials and the "StreamVault: post Shorts" workflow from the built-in template (your folder, repo, schedule). **Update** re-sends it after you change something. Shows recent runs. |
 
 Notes:
 - **Secrets** (n8n API key, Azure secret, GitHub token, Google secret, the OneDrive sign-in) are encrypted with Windows' DPAPI in the app's data folder. They're never shown again in full.
 - **Step 8 needs the uploader workflow on `main`:** `.github/workflows/youtube-upload.yml` must be on the repo's default branch. The check tells you if it isn't, which means this branch hasn't been merged yet.
-- **Why n8n's OAuth sign-ins aren't automatic:** they're browser sign-ins that only n8n's own page can run. That's why step 10 opens it for you.
+- **Why n8n's OAuth sign-ins aren't automatic:** they're browser sign-ins that only n8n's own page can run. That's why step 11 opens it for you.
 
 ## 3. Using the app
 - **Add:** paste links (an optional "only this part" range like `1:00:00-2:30:00`) or drop video files, and pick High, Normal or Low.
@@ -75,14 +76,14 @@ n8n picks the Short and starts the GitHub Actions workflow `youtube-upload.yml`.
 
 - **Terms:** automating Studio is against YouTube's terms, and the channel can be flagged for it.
 - **Breakage:** Studio changes can break the script. All its selectors are in `SELECTORS` at the top of `studio_upload.py`.
-- **Sign-outs:** each run comes from a different GitHub datacenter IP, so Google may sign the session out. When it does (**Needs a look** shows `session`), repeat Setup step 8.
+- **Sign-outs:** each run comes from a different GitHub datacenter IP, so Google may sign the session out. When it does (**Needs a look** shows `session`), repeat Setup step 9 (YouTube sign-in).
 - **Public logs:** the repo is public, so its Actions logs are too. The workflow masks the download link and the n8n callback URL, and failure screenshots go to OneDrive `failures/`, never to a public artifact. Making the repo private keeps the uploader itself private; private repos get 2,000 free Actions minutes a month, and 6 uploads a day use about 700.
 - **Test by hand:** Actions → *YouTube upload (Studio)* → Run workflow, with **dry_run** ticked, `post_b64` = `echo '{"title":"Test","description":"test","tags":["test"]}' | base64`, and `video_url` = a direct link to a short mp4. It leaves a private draft in Studio.
-- **After the audit:** set **Upload through** to *YouTube API* in step 10 and click **Update**. Uploads then use the Data API, with no browser and no session to keep alive.
+- **After the audit:** set **Upload through** to *YouTube API* in step 11 and click **Update**. Uploads then use the Data API, with no browser and no session to keep alive.
 
 | Failure | What happens |
 |---|---|
-| Signed out (`session`) | The Short stays in `ready/` and goes out on the next run once you redo step 8. |
+| Signed out (`session`) | The Short stays in `ready/` and goes out on the next run once you redo step 9. |
 | Daily upload limit (`limit`) | It waits for the next run. Verifying the channel at https://www.youtube.com/verify raises the limit. |
 | Copyright claim (`post`) | Left private in Studio. The Short goes under **Needs a look**, and n8n skips it. |
 | No report within 45 min | Marked *unconfirmed* and never re-uploaded. Check Studio, then **Mark posted** or **Try again**. |
@@ -94,5 +95,5 @@ n8n picks the Short and starts the GitHub Actions workflow `youtube-upload.yml`.
 - **Job fails at Transcribe:** VoiceStudio isn't running, or no model is loaded (Setup step 5, **Test transcription**).
 - **Job fails at Find & render:** open its **Log**. Claude errors and `FAILED.txt` reasons show there.
 - **Shorts stuck under Uploading:** the sidebar box shows the error. "Connect OneDrive" means the sign-in expired: redo Setup step 7.
-- **Nothing posts:** check that Shorts has something under Waiting (not on hold) and that Setup step 10 says *active*. The recent runs in step 10, or n8n's Executions, show errors.
-- **You changed the repo, folder or schedule:** Setup step 10 → **Update workflow in n8n**.
+- **Nothing posts:** check that Shorts has something under Waiting (not on hold) and that Setup step 11 says *active*. The recent runs in step 11, or n8n's Executions, show errors.
+- **You changed the repo, folder or schedule:** Setup step 11 → **Update workflow in n8n**.
