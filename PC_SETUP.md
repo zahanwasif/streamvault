@@ -1,10 +1,12 @@
 # StreamVault: setup guide for the desktop PC (RTX 3080, Ryzen 7 5700X3D)
 
-**For Claude:** the user asked you to set up StreamVault on this PC. Work through this file top to bottom, and keep the task list current.
+**The StreamVault app's Setup tab now does all of this** (install it from `QUEUE_SETUP.md` §1). This file is the manual fallback, and a record of the pitfalls the app works around.
+
+**For Claude:** if the user asks you to set StreamVault up by hand on this PC, work through this file top to bottom, and keep the task list current.
 
 ## What StreamVault is
 
-You paste a YouTube or Twitch URL, or drop videos in `inbox/`. Claude finds the funny, romantic, engaging and hype moments, renders 9:16 YouTube Shorts with captions, and saves them to `shorts/<slug>/` with a metadata JSON per clip. That JSON feeds a later phase 2: scheduled YouTube uploads.
+You paste a YouTube or Twitch URL, or drop videos in `inbox/`. Claude finds the funny, romantic, engaging and hype moments, renders 9:16 YouTube Shorts with captions, and saves them to `shorts/<slug>/` with a metadata JSON per clip. That JSON feeds the posting queue (`QUEUE_SETUP.md`).
 
 It's built on [video-use](https://github.com/browser-use/video-use), plus the `shorts-clipper` skill and the scripts in `clipper/`. Everything except real Scribe transcription was built and tested on the laptop on 2026-10-25.
 
@@ -99,6 +101,9 @@ In `clipper/transcribe_long.py`, add `--engine local|scribe`. The default comes 
 1. **Renderer:** render a synthetic test clip (ffmpeg `testsrc2` plus `sine`, with a fake transcript JSON) through `clipper/render_short.py` in all four layouts (`center`, `split`, `blur`, `fit`). Each should be 1080x1920 at the expected duration, and `clipper/sheet.py` should show readable captions.
 2. **Local transcription:** run `fetch.py https://www.youtube.com/watch?v=jNQXAC9IVRw` (19 s), then `transcribe_long.py --engine local`, then `pack_transcripts.py`. Check the word times look right, and report how long it took.
 3. **End to end:** the user pastes a real stream URL. Run the shorts-clipper skill fully automatically and report the transcription speed (minutes per hour of audio).
+
+## 9. Desktop app and scheduled posting
+Once the pipeline works, set up the StreamVault desktop app (add links and videos, upload Shorts to online OneDrive, review them) and the n8n poster: follow `QUEUE_SETUP.md`.
 
 ## Pitfalls already solved (don't redo)
 - **Captions failing on Windows:** the `.as_posix()` patch in step 2 fixes this.

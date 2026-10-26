@@ -1,0 +1,62 @@
+{
+  "name": "streamvault",
+  "productName": "StreamVault",
+  "version": "1.1.0",
+  "description": "Add links or videos; the PC turns them into Shorts and uploads them to OneDrive for the n8n poster.",
+  "author": "Zahan Wasif",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "stage": "node scripts/stage-workspace.js",
+    "dist": "npm run stage && electron-builder --win --x64"
+  },
+  "dependencies": {
+    "libsodium-wrappers": "0.8.4"
+  },
+  "devDependencies": {
+    "electron": "44.7.0",
+    "electron-builder": "26.17.0"
+  },
+  "build": {
+    "appId": "com.streamvault.desktop",
+    "productName": "StreamVault",
+    "files": [
+      "main.js",
+      "preload.js",
+      "onedrive.js",
+      "workspace.js",
+      "secrets.js",
+      "setup.js",
+      "github.js",
+      "n8n.js",
+      "renderer/**",
+      "assets/**"
+    ],
+    "extraResources": [
+      {
+        "from": "build/workspace",
+        "to": "workspace"
+      }
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "artifactName": "StreamVault-Setup-${version}.exe"
+    },
+    "publish": null
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zahanwasif/streamvault.git"
+  }
+}

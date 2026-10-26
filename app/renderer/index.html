@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: media: https:; media-src media: https:">
+  <title>StreamVault</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand"><img src="../assets/icon.png" alt=""><span>StreamVault</span></div>
+    <nav>
+      <button class="nav" data-tab="setup">
+        <svg viewBox="0 0 24 24"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg><span>Setup</span><b class="badge" id="badge-setup"></b>
+      </button>
+      <button class="nav active" data-tab="add">
+        <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>Add</span>
+      </button>
+      <button class="nav" data-tab="queue">
+        <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>Queue</span><b class="badge" id="badge-queue"></b>
+      </button>
+      <button class="nav" data-tab="shorts">
+        <svg viewBox="0 0 24 24"><rect x="7" y="3" width="10" height="18" rx="2"/><path d="M11 9.5v5l4-2.5z"/></svg><span>Shorts</span><b class="badge" id="badge-shorts"></b>
+      </button>
+      <button class="nav" data-tab="settings">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg><span>Settings</span>
+      </button>
+    </nav>
+    <div class="engine" id="engine">
+      <span class="dot"></span>
+      <div><strong id="engine-state">Starting…</strong><small id="engine-msg"></small></div>
+    </div>
+    <div class="upload" id="upload-box">
+      <svg viewBox="0 0 24 24"><path d="M7 18a5 5 0 0 1-.6-9.96A6 6 0 0 1 18 9a4.5 4.5 0 0 1-.5 9M12 12v8M9 15l3-3 3 3"/></svg>
+      <div><strong id="upload-state"></strong><small id="upload-msg"></small><span class="bar"><i id="upload-bar"></i></span></div>
+    </div>
+  </aside>
+
+  <main>
+    <!-- Setup -->
+    <section class="tab" id="tab-setup">
+      <header>
+        <h1>Setup</h1>
+        <p>Everything StreamVault needs, in order. Each step checks itself; fix the red ones top to bottom. Nothing installs or changes until you click its button.</p>
+      </header>
+      <div id="steps"></div>
+    </section>
+
+    <!-- Add -->
+    <section class="tab active" id="tab-add">
+      <header><h1>Add videos</h1><p>Links or files go into the queue. The PC downloads each one, transcribes it with VoiceStudio, picks the best moments and uploads the Shorts to your online OneDrive.</p></header>
+
+      <div class="card">
+        <h2>Links</h2>
+        <textarea id="links" rows="6" placeholder="https://www.youtube.com/watch?v=…&#10;https://www.twitch.tv/videos/…"></textarea>
+        <div class="row">
+          <label class="field">Only this part <small>optional</small>
+            <input id="section" placeholder="1:00:00-2:30:00">
+          </label>
+          <div class="field">Priority <div class="seg" id="prio-links"></div></div>
+          <span class="grow"></span>
+          <span class="hint" id="links-count"></span>
+          <button class="primary" id="add-links">Add to queue</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Video files</h2>
+        <div class="drop" id="drop">
+          <svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></svg>
+          <p>Drop videos here, or <button class="link" id="pick-files">choose files</button></p>
+          <small>mp4, mov, mkv, webm…  Files stay where they are.</small>
+        </div>
+        <ul class="files" id="file-list"></ul>
+        <div class="row">
+          <div class="field">Priority <div class="seg" id="prio-files"></div></div>
+          <span class="grow"></span>
+          <button class="primary" id="add-files" disabled>Add videos</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Queue -->
+    <section class="tab" id="tab-queue">
+      <header><h1>Queue</h1><p>One video at a time, High priority first. Closing the window keeps it running in the tray.</p></header>
+      <div id="jobs"></div>
+      <p class="empty" id="jobs-empty">Nothing queued yet. Add links or videos to start.</p>
+    </section>
+
+    <!-- Shorts -->
+    <section class="tab" id="tab-shorts">
+      <header>
+        <h1>Shorts</h1>
+        <p>What n8n will post, in order: priority, then score, then oldest. Edit the copy or put a Short on hold before it goes out.</p>
+      </header>
+      <div class="toolbar">
+        <div class="chips" id="filters">
+          <button class="chip" data-filter="uploading">Uploading <b id="n-uploading">0</b></button>
+          <button class="chip active" data-filter="waiting">Waiting <b id="n-waiting">0</b></button>
+          <button class="chip" data-filter="held">On hold <b id="n-held">0</b></button>
+          <button class="chip" data-filter="posted">Posted <b id="n-posted">0</b></button>
+          <button class="chip warn" data-filter="check">Needs a look <b id="n-check">0</b></button>
+        </div>
+        <span class="grow"></span>
+        <button class="ghost" id="open-output">Open in OneDrive</button>
+        <button class="ghost" id="refresh-shorts">Refresh</button>
+      </div>
+      <p class="banner" id="shorts-error"></p>
+      <div class="grid" id="shorts"></div>
+      <p class="empty" id="shorts-empty"></p>
+    </section>
+
+    <!-- Settings -->
+    <section class="tab" id="tab-settings">
+      <header><h1>Settings</h1><p>How Shorts are made. Accounts, folders and tools are in Setup.</p></header>
+      <div class="card">
+        <h2>Processing</h2>
+        <div class="row wrap">
+          <label class="field">Minimum score <small>0 = skill default (7)</small><input id="s-minscore" type="number" min="0" max="10" step="1"></label>
+          <label class="field">Max Shorts per video <small>0 = skill default (15)</small><input id="s-maxshorts" type="number" min="0" max="50"></label>
+          <div class="field">Default priority <div class="seg" id="s-priority"></div></div>
+        </div>
+        <label class="check"><input type="checkbox" id="s-delete"> Delete each downloaded video after its Shorts are exported (transcripts are kept)</label>
+        <label class="check"><input type="checkbox" id="s-login"> Start StreamVault when I sign in to Windows</label>
+      </div>
+      <div class="row">
+        <span class="grow"></span>
+        <span class="hint" id="settings-saved"></span>
+        <button class="primary" id="save-settings">Save</button>
+      </div>
+      <div class="card">
+        <div class="row"><h2>Engine output</h2><span class="grow"></span><button class="ghost" id="restart-engine">Restart engine</button></div>
+        <pre class="log" id="engine-log"></pre>
+      </div>
+    </section>
+  </main>
+
+  <div class="modal" id="od-modal">
+    <div class="dialog">
+      <h2>Connect OneDrive</h2>
+      <p>Open the Microsoft sign-in page, enter this code, and sign in with the account that has your OneDrive.</p>
+      <div class="code" id="od-code">…</div>
+      <div class="row">
+        <button class="ghost" id="od-copy">Copy code</button>
+        <span class="grow"></span>
+        <button class="ghost" id="od-cancel">Cancel</button>
+        <button class="primary" id="od-open">Open sign-in page</button>
+      </div>
+      <p class="hint" id="od-wait">Waiting for you to finish signing in…</p>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <script src="app.js"></script>
+</body>
+</html>

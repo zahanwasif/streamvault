@@ -1,0 +1,116 @@
+"""Hand rendered Shorts to the n8n poster: copy each one into the outbox for the app to upload.
+
+    outbox/<post id>/video.mp4
+    outbox/<post id>/post.json     (written last, so the uploader never takes half a post)
+
+The StreamVault app uploads each outbox folder to online OneDrive as StreamVault/ready/<post id>/
+(video first, post.json last) and then deletes it here.
+
+The post id is `<export time>_<NN>_<slug>`. n8n posts the waiting post with the highest `priority`
+(high/normal/low, set per video in the app), then the highest `score`, then the oldest; it skips
+posts with `"hold": true`, and moves each folder to posted/ once YouTube has it.
+
+Copy comes from shorts/<slug>/posts_copy.json when it has an entry for the Short (see
+plan_posts.py), else from the meta JSON's title/description/hashtags. Shorts flagged in the
+self-check ("flagged" in the meta) are exported on hold, for review in the app. Shorts already
+exported or already posted by hand are skipped. Each exported meta JSON gets a `queue` block
+recording where it went.
+
+Usage:
+    python clipper/export_posts.py shorts/<slug> [--to outbox] [--priority high] [--min-score 7]
+"""
+
+from __future__ import annotations
+
+import _env
+
+import argparse
+import json
+import os
+import shutil
+from datetime import datetime
+from pathlib import Path
+
+from plan_posts import TITLE_MAX, build_description, build_tags
+
+
+def post_for(meta: dict, nn: str, copy: dict | None) -> dict:
+    entry = (copy or {}).get("posts", {}).get(nn)
+    if entry and meta.get("source_url"):
+        title = entry["title"]
+        description = build_description(entry, copy, meta["source_url"])
+        tags = build_tags(entry, copy)
+    else:
+        title = meta.get("title", "")
+        description = meta.get("description", "")
+        tags = [h.lstrip("#") for h in meta.get("hashtags", [])]
+    return {"title": title[:TITLE_MAX], "description": description, "tags": tags}
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="Copy rendered Shorts into the outbox for the app to upload")
+    ap.add_argument("folder", type=Path, help="shorts/<slug>")
+    ap.add_argument("--to", type=Path, default=_env.ROOT / "outbox", help="outbox folder (default: outbox/)")
+    ap.add_argument("--priority", choices=["high", "normal", "low"], default="normal")
+    ap.add_argument("--min-score", type=float, default=0)
+    args = ap.parse_args()
+
+    outbox = args.to
+    outbox.mkdir(parents=True, exist_ok=True)
+
+    copy_path = args.folder / "posts_copy.json"
+    copy = json.loads(copy_path.read_text(encoding="utf-8")) if copy_path.exists() else None
+    slug = args.folder.resolve().name
+    batch = datetime.now().strftime("%Y%m%d-%H%M%S")
+
+    exported = skipped = 0
+    for meta_path in sorted(args.folder.glob("[0-9][0-9]_*.json")):
+        video = meta_path.with_suffix(".mp4")
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        nn = meta_path.name[:2]
+        why = ("no rendered video" if not video.exists()
+               else "already exported" if meta.get("queue", {}).get("exported_at")
+               else "already posted" if meta.get("youtube", {}).get("studio_status") in ("published", "scheduled")
+               else "below min score" if meta.get("score", 10) < args.min_score
+               else "")
+        if why:
+            print(f"skip {meta_path.name}: {why}")
+            skipped += 1
+            continue
+
+        post_id = f"{batch}_{nn}_{slug[:40]}"
+        dest = outbox / post_id
+        dest.mkdir()
+        shutil.copy2(video, dest / "video.mp4")
+        post = {
+            "version": 1,
+            "id": post_id,
+            **post_for(meta, nn, copy),
+            "priority": args.priority,
+            "hold": bool(meta.get("flagged")),
+            "flag": meta.get("flagged"),
+            "category": meta.get("category"),
+            "score": meta.get("score"),
+            "creator": meta.get("creator"),
+            "source_url": meta.get("source_url"),
+            "source_timestamps": meta.get("source_timestamps"),
+            "slug": slug,
+            "rendered_file": video.name,
+            "video": "video.mp4",
+            "video_bytes": video.stat().st_size,
+            "exported_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        }
+        tmp = dest / "post.json.tmp"
+        tmp.write_text(json.dumps(post, indent=2, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, dest / "post.json")
+
+        meta["queue"] = {"exported_at": post["exported_at"], "post_id": post_id}
+        meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+        print(f"READY {dest}" + (f"  (on hold: {meta['flagged']})" if meta.get("flagged") else ""))
+        exported += 1
+
+    print(f"exported {exported}, skipped {skipped}")
+
+
+if __name__ == "__main__":
+    main()

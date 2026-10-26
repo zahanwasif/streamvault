@@ -1,0 +1,111 @@
+name: YouTube upload (Studio)
+
+# Dispatched by the n8n poster (n8n/post-shorts.json, UPLOADER = 'browser') with the Short it picked.
+# Uploads it through YouTube Studio with Playwright and reports back to n8n's Wait node.
+# This repo is public: run logs are too. The video link and the n8n URL are masked before any step
+# prints them, and failure screenshots go back to n8n (saved privately in OneDrive), never to an
+# artifact.
+run-name: Upload ${{ inputs.post_id || 'test' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      post_b64:
+        description: "post.json, base64 (title, description, tags)"
+        required: true
+      video_url:
+        description: "Download link for the video file"
+        required: true
+      resume_url:
+        description: "n8n Wait-node URL to report to (leave empty for a manual test)"
+        required: false
+        default: ""
+      post_id:
+        description: "Post folder name (for the run title)"
+        required: false
+        default: ""
+      dry_run:
+        description: "Fill everything but leave a private draft"
+        type: boolean
+        default: false
+
+concurrency:
+  group: youtube-upload
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      HAS_PAT: ${{ secrets.SECRETS_PAT != '' }}
+    steps:
+      # Read the links from the event file, not from env/inline expressions, so they are masked
+      # before any step header could print them.
+      - name: Mask links
+        run: |
+          for key in video_url resume_url; do
+            v=$(jq -r --arg k "$key" '.inputs[$k] // ""' "$GITHUB_EVENT_PATH")
+            if [ -n "$v" ]; then echo "::add-mask::$v"; fi
+          done
+          echo "SHORT=$RUNNER_TEMP/short" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/short"
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Playwright
+        run: |
+          pip install playwright==1.63.0
+          python -m playwright install --with-deps chromium
+
+      - name: Get the Short
+        env:
+          YT_SESSION: ${{ secrets.YT_SESSION }}
+        run: |
+          jq -r '.inputs.video_url' "$GITHUB_EVENT_PATH" > "$SHORT/url"
+          curl -fsSL --retry 3 -o "$SHORT/video.mp4" "$(cat "$SHORT/url")"
+          jq -r '.inputs.post_b64' "$GITHUB_EVENT_PATH" | base64 -d > "$SHORT/post.json"
+          printf '%s' "$YT_SESSION" > "$SHORT/session.b64"
+          echo "video: $(stat -c %s "$SHORT/video.mp4") bytes"
+
+      - name: Upload through Studio
+        run: |
+          args=(--video "$SHORT/video.mp4" --post "$SHORT/post.json" --session "$SHORT/session.b64"
+                --session-out "$SHORT/session.new")
+          resume=$(jq -r '.inputs.resume_url // ""' "$GITHUB_EVENT_PATH")
+          if [ -n "$resume" ]; then args+=(--resume-url "$resume"); fi
+          if [ "$(jq -r '.inputs.dry_run' "$GITHUB_EVENT_PATH")" = "true" ]; then args+=(--dry-run); fi
+          touch "$SHORT/reported"   # studio_upload.py always reports, success or not
+          python uploader/studio_upload.py "${args[@]}"
+
+      # Google rotates session cookies; storing the fresh ones keeps the sign-in alive longer.
+      # Needs a fine-grained token with Secrets: read and write on this repo.
+      - name: Save the refreshed session
+        if: success() && env.HAS_PAT == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.SECRETS_PAT }}
+        run: |
+          if [ -s "$SHORT/session.new" ]; then
+            gh secret set YT_SESSION --repo "$GITHUB_REPOSITORY" < "$SHORT/session.new"
+          fi
+
+      - name: Tell n8n the run failed
+        if: failure()
+        run: |
+          resume=$(jq -r '.inputs.resume_url // ""' "$GITHUB_EVENT_PATH")
+          if [ -n "$resume" ] && [ ! -e "$SHORT/reported" ]; then
+            curl -fsS -X POST -H 'Content-Type: application/json' \
+              -d '{"ok":false,"kind":"runner","error":"The GitHub run failed before the upload started: see the Actions log"}' \
+              "$resume" || true
+          fi
+
+      - name: Clean up
+        if: always()
+        run: rm -rf "$SHORT" uploader/out
