@@ -113,6 +113,24 @@ function sendRequest(req) {
   writeJsonAtomic(path.join(workerDir(), 'requests', name), req);
 }
 
+// Adds the engine hasn't picked up yet (it isn't running, or is starting): the Queue lists them as waiting.
+function pendingAdds() {
+  const dir = path.join(workerDir(), 'requests');
+  let names = [];
+  try {
+    names = fs.readdirSync(dir).filter(n => n.endsWith('.json')).sort();
+  } catch {
+    return [];
+  }
+  return names
+    .map(name => ({ ...readJson(path.join(dir, name), {}), id: name }))
+    .filter(r => r.op === 'add' && r.target);
+}
+
+function sendPending() {
+  emitToUi('pending', pendingAdds());
+}
+
 function isInside(child, parent) {
   if (!parent) return false;
   const rel = path.relative(path.resolve(parent), path.resolve(child));
@@ -319,6 +337,7 @@ function startEngine() {
     if (ev.type === 'job' && ev.job.status === 'running') setEngineStatus('working', ev.job.title || ev.job.target);
     if (ev.type === 'job' && ev.job.posts && ev.job.posts.length) uploadSoon();
     emitToUi('engine-event', ev);
+    if (ev.type === 'ready' || ev.type === 'applied') sendPending();
   });
   readline.createInterface({ input: proc.stderr }).on('line', logEngine);
 
@@ -541,7 +560,9 @@ function handle(channel, fn) {
 
 handle('get-settings', () => settings);
 handle('set-settings', next => saveSettings(next));
-handle('get-state', () => ({ state: readState(), engine: engineStatus, engineLog, upload, onedrive: oneDriveStatus() }));
+handle('get-state', () => ({
+  state: readState(), pending: pendingAdds(), engine: engineStatus, engineLog, upload, onedrive: oneDriveStatus(),
+}));
 handle('run-checks', runChecks);
 handle('restart-engine', () => restartEngine());
 
@@ -559,12 +580,19 @@ handle('add-links', ({ links, section, priority }) => {
     .map(u => u.replace(/[).,;\]]+$/, ''));
   const sec = /^\d[\d:]*-\d[\d:]*$/.test(String(section || '').trim()) ? section.trim() : null;
   for (const url of urls) sendRequest({ op: 'add', kind: 'url', target: url, section: sec, priority });
+  sendPending();
   return urls.length;
 });
 handle('add-files', ({ files, priority }) => {
   const ok = files.filter(f => VIDEO_EXTS.includes(path.extname(f).slice(1).toLowerCase()) && fs.existsSync(f));
   for (const f of ok) sendRequest({ op: 'add', kind: 'file', target: f, priority });
+  sendPending();
   return ok.length;
+});
+handle('remove-pending', name => {
+  // Only a request file name, never a path.
+  if (/^[\w-]+\.json$/.test(String(name))) fs.rmSync(path.join(workerDir(), 'requests', name), { force: true });
+  sendPending();
 });
 handle('pick-files', async () => {
   const r = await dialog.showOpenDialog(win, {

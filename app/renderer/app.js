@@ -12,6 +12,8 @@ const STATUS_LABEL = {
 };
 
 const jobs = new Map();
+let pending = [];             // adds the engine hasn't picked up yet
+let engineState = { state: 'starting', message: '' };
 const logs = new Map();       // job id -> recent live log lines
 const openLogs = new Set();   // job ids whose log panel is open
 let shorts = [];
@@ -94,8 +96,11 @@ $('#add-links').addEventListener('click', async () => {
   $('#links').value = '';
   $('#section').value = '';
   countLinks();
-  toast(`Added ${n} to the queue`);
+  toast(`Added ${n} to the queue${engineNote()}`, engineDown() ? 'bad' : '');
 });
+
+const engineDown = () => ['stopped', 'error'].includes(engineState.state);
+const engineNote = () => (engineDown() ? '. The engine isn\'t running, so it will wait (see Setup).' : '');
 
 let pendingFiles = [];
 function renderFiles() {
@@ -122,7 +127,8 @@ $('#add-files').addEventListener('click', async () => {
   const n = await sv.addFiles(pendingFiles, $('#prio-files').dataset.value);
   pendingFiles = [];
   renderFiles();
-  toast(n ? `Added ${n} video${n > 1 ? 's' : ''} to the queue` : 'Those files are not videos', n ? '' : 'bad');
+  toast(n ? `Added ${n} video${n > 1 ? 's' : ''} to the queue${engineNote()}` : 'Those files are not videos',
+    n && !engineDown() ? '' : 'bad');
 });
 
 // ------------------------------------------------------------------ queue
@@ -145,12 +151,30 @@ function stepper(job) {
   }));
 }
 
+// An add the engine hasn't taken in yet: it becomes a real job once the engine is running.
+function pendingCard(req) {
+  const why = engineDown()
+    ? `The engine isn't running${engineState.message ? ` (${engineState.message})` : ''}. It starts once Setup is done.`
+    : 'The engine is starting and will pick this up in a moment.';
+  return el('article', { class: 'job s-queued' },
+    el('div', { class: 'job-head' },
+      el('div', { class: 'job-title' },
+        el('strong', { title: req.target }, req.kind === 'file' ? basename(req.target) : req.target),
+        el('small', {}, [req.kind === 'file' ? 'Video file' : 'Link', req.section ? ` · part ${req.section}` : ''].join(''))),
+      el('span', { class: 'status st-queued' }, 'Waiting for engine'),
+      el('span', { class: `prio p-${req.priority}` }, PRIO_LABEL[req.priority] || '')),
+    el('div', { class: 'job-foot' },
+      el('span', { class: 'meta' }, why),
+      el('span', { class: 'grow' }),
+      el('button', { class: 'ghost sm', onclick: () => sv.removePending(req.id) }, 'Remove')));
+}
+
 function renderJobs() {
   const list = [...jobs.values()].sort(jobOrder);
-  $('#jobs-empty').style.display = list.length ? 'none' : '';
-  const active = list.filter(j => ['running', 'queued', 'retry'].includes(j.status)).length;
+  $('#jobs-empty').style.display = list.length || pending.length ? 'none' : '';
+  const active = list.filter(j => ['running', 'queued', 'retry'].includes(j.status)).length + pending.length;
   $('#badge-queue').textContent = active || '';
-  $('#jobs').replaceChildren(...list.map(job => {
+  $('#jobs').replaceChildren(...pending.map(pendingCard), ...list.map(job => {
     const live = job.status === 'running' || job.status === 'queued' || job.status === 'retry';
     const name = job.title || (job.kind === 'file' ? basename(job.target) : job.target);
     const prio = el('select', { class: `prio p-${job.priority}`, disabled: !live && job.status !== 'done',
@@ -674,6 +698,8 @@ const ENGINE_LABEL = {
   starting: 'Starting…', running: 'Ready', idle: 'Waiting for videos', working: 'Working', stopped: 'Stopped', error: 'Error',
 };
 function setEngine({ state, message }) {
+  engineState = { state, message };
+  if (pending.length) scheduleRender();
   const box = $('#engine');
   box.className = `engine e-${state}`;
   $('#engine-state').textContent = ENGINE_LABEL[state] || state;
@@ -695,6 +721,7 @@ function scheduleRender() {
 
 sv.onEngineStatus(setEngine);
 sv.onEngineLog(appendEngineLog);
+sv.onPending(list => { pending = list; scheduleRender(); });
 sv.onEvent(ev => {
   if (ev.type === 'ready') { jobs.clear(); ev.jobs.forEach(j => jobs.set(j.id, j)); }
   if (ev.type === 'job') {
@@ -721,8 +748,9 @@ sv.onEvent(ev => {
 
 (async function init() {
   fillSettings(await sv.getSettings());
-  const { state, engine, engineLog, upload } = await sv.getState();
+  const { state, pending: waiting, engine, engineLog, upload } = await sv.getState();
   Object.values(state.jobs || {}).forEach(j => jobs.set(j.id, j));
+  pending = waiting || [];
   setEngine(engine);
   showUpload(upload);
   showOneDriveLogin(await sv.oneDriveStatus());

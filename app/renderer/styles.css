@@ -144,10 +144,10 @@ button.link:hover { text-decoration: underline; }
 .seg .p-high.on { background: var(--high); }
 .seg .p-normal.on { background: var(--normal); }
 .seg .p-low.on { background: var(--low); }
-select.prio { width: auto; padding: 4px 8px; font-weight: 600; font-size: 13px; }
-select.p-high { color: var(--high); }
-select.p-normal { color: var(--normal); }
-select.p-low { color: var(--low); }
+select.prio, span.prio { width: auto; padding: 4px 8px; font-weight: 600; font-size: 13px; }
+select.p-high, span.p-high { color: var(--high); }
+select.p-normal, span.p-normal { color: var(--normal); }
+select.p-low, span.p-low { color: var(--low); }
 
 /* drop zone */
 .drop {
