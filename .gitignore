@@ -18,6 +18,7 @@ outbox/
 # Desktop app
 app/node_modules/
 app/dist/
+app/build/
 
 # Studio uploader: failure screenshots/HTML and saved sessions (as good as a password)
 uploader/out/

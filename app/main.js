@@ -13,6 +13,11 @@ const path = require('path');
 const readline = require('readline');
 const { pathToFileURL } = require('url');
 const { OneDrive } = require('./onedrive');
+const { Workspace } = require('./workspace');
+const { Secrets } = require('./secrets');
+const setup = require('./setup');
+const { GitHub } = require('./github');
+const { N8n, buildWorkflow } = require('./n8n');
 
 const VIDEO_EXTS = ['mp4', 'mov', 'mkv', 'avi', 'm4v', 'webm'];
 const PRIORITIES = ['high', 'normal', 'low'];
@@ -40,6 +45,14 @@ function defaultSettings() {
     repoDir: app.isPackaged ? 'C:\\StreamVault' : path.resolve(__dirname, '..'),
     msClientId: '',
     onedriveFolder: 'StreamVault',
+    n8nUrl: 'https://n8n.veleads.io',
+    githubRepo: 'zahanwasif/streamvault',
+    googleClientId: '',
+    postEveryHours: 4,
+    timezone: 'America/New_York',
+    uploader: 'browser',
+    n8nIds: {},        // ids of what the app created in n8n: { onedrive, github, youtube, workflow }
+    sessionSavedAt: null,
     voicestudioUrl: 'http://127.0.0.1:3900',
     defaultPriority: 'normal',
     minScore: 0,
@@ -271,8 +284,12 @@ function setEngineStatus(state, message = '') {
 function startEngine() {
   clearTimeout(restartTimer);
   if (engine) return;
+  if (pythonStale) {
+    setEngineStatus('stopped', 'Finish Setup: the Python environment needs updating');
+    return;
+  }
   if (!fs.existsSync(path.join(settings.repoDir, 'clipper', 'run_queue.py'))) {
-    setEngineStatus('stopped', `StreamVault folder not found: ${settings.repoDir}`);
+    setEngineStatus('stopped', 'Finish Setup: the scripts aren\'t in the workspace yet');
     return;
   }
   const args = ['run', '--project', 'video-use', 'python', 'clipper/run_queue.py', '--watch', '--parent-pipe',
@@ -586,6 +603,191 @@ handle('show-folder', async () => {
   else shell.openPath(path.join(settings.repoDir, 'shorts'));
 });
 
+
+// ------------------------------------------------------------------ setup (the Setup tab)
+
+let workspace = null;
+let secrets = null;
+let pythonStale = false;   // video-use was updated: `uv sync` again before the engine runs
+
+const setupLog = step => line => emitToUi('setup-log', { step, line: String(line).slice(0, 400) });
+const n8nClient = () => new N8n(settings.n8nUrl, secrets.get('n8nApiKey'));
+const github = () => new GitHub(secrets.get('githubToken'), settings.githubRepo);
+
+function freeSpace(dir) {
+  try {
+    let d = dir;
+    while (!fs.existsSync(d) && path.dirname(d) !== d) d = path.dirname(d);
+    const st = fs.statfsSync(d);
+    return Math.round((st.bavail * st.bsize) / 1e9);
+  } catch {
+    return null;
+  }
+}
+
+const CHECKS = {
+  async workspace() {
+    const st = workspace.status(settings.repoDir);
+    const gb = freeSpace(settings.repoDir);
+    return { ...st, ok: st.ok && !pythonStale, dir: settings.repoDir, freeGb: gb,
+      message: `${st.message}${gb != null ? ` · ${gb} GB free` : ''}` };
+  },
+  tools: () => setup.checkTools({ voicestudioUrl: settings.voicestudioUrl }),
+  async python() {
+    const r = await setup.pythonEnv(settings.repoDir);
+    return pythonStale ? { ok: false, message: 'scripts were updated: set up the environment again' } : r;
+  },
+  claude: () => setup.claudeStatus(),
+  async voicestudio() {
+    return (await setup.voicestudioAnswers(settings.voicestudioUrl))
+      ? { ok: true, message: `answering at ${settings.voicestudioUrl}` }
+      : { ok: false, message: `not answering at ${settings.voicestudioUrl}. Start VoiceStudio.` };
+  },
+  async n8n() {
+    const c = n8nClient();
+    if (!settings.n8nUrl || !secrets.get('n8nApiKey')) return { ok: false, message: 'add the n8n URL and API key', redirectUrl: c.redirectUrl };
+    return { ...(await c.check()), redirectUrl: c.redirectUrl };
+  },
+  async microsoft() {
+    const od = oneDriveStatus();
+    const secret = !!secrets.get('msClientSecret');
+    if (!settings.msClientId) return { ok: false, message: 'add the Azure app (client) ID', ...od, secret };
+    if (!secret) return { ok: false, message: 'add the client secret (n8n needs it)', ...od, secret };
+    if (!od.signedIn) return { ok: false, message: 'connect OneDrive', ...od, secret };
+    if (!account && drive) account = await drive.me().catch(() => null);
+    return { ok: true, message: `OneDrive: ${account ? account.email : 'connected'}`, ...oneDriveStatus(), secret };
+  },
+  async github() {
+    const r = await github().check();
+    let session = null;
+    if (r.user) session = await github().secretInfo('YT_SESSION').catch(() => null);
+    const sessionMsg = session ? `YouTube session saved ${new Date(session.updated_at).toLocaleString()}` : 'YouTube session not saved yet';
+    return { ...r, ok: r.ok && !!session, session: session && session.updated_at,
+      message: r.ok ? `${r.message} · ${sessionMsg}` : r.message };
+  },
+  async youtubeApi() {
+    const set = !!(settings.googleClientId && secrets.get('googleClientSecret'));
+    return { ok: true, optional: true, set, message: set ? 'Google OAuth client saved' : 'skipped: posting goes through Studio' };
+  },
+  async workflow() {
+    const id = settings.n8nIds.workflow;
+    if (!id) return { ok: false, message: 'not created yet' };
+    try {
+      const st = await n8nClient().status(id);
+      if (!st.exists) return { ok: false, message: 'the workflow was deleted in n8n: create it again' };
+      const c = n8nClient();
+      return { ok: st.active, ...st, url: c.workflowUrl(id),
+        credentials: Object.fromEntries(Object.entries(settings.n8nIds).filter(([k]) => k !== 'workflow')
+          .map(([k, v]) => [k, { ...v, url: c.credentialUrl(v.id) }])),
+        message: st.active ? 'active: posting on schedule' : 'created, not active yet' };
+    } catch (e) {
+      return { ok: false, message: e.message };
+    }
+  },
+};
+
+async function saveSetup(values) {
+  const secretKeys = ['n8nApiKey', 'msClientSecret', 'githubToken', 'googleClientSecret'];
+  secrets.set(Object.fromEntries(Object.entries(values).filter(([k]) => secretKeys.includes(k))));
+  const plain = Object.fromEntries(Object.entries(values).filter(([k]) => !secretKeys.includes(k)));
+  if (Object.keys(plain).length) saveSettings(plain);
+}
+
+async function createWorkflow(log) {
+  const n = n8nClient();
+  const gh = await github().check();
+  if (!gh.user) throw new Error(`GitHub: ${gh.message}`);
+  const ids = { ...settings.n8nIds };
+  log('creating credentials in n8n…');
+  ids.onedrive = await n.ensureCredential('onedrive',
+    { clientId: settings.msClientId, clientSecret: secrets.get('msClientSecret') }, ids.onedrive);
+  log(`${ids.onedrive.created ? 'created' : 'kept'} ${ids.onedrive.name}`);
+  ids.github = await n.ensureCredential('github',
+    { server: 'https://api.github.com', user: gh.user, accessToken: secrets.get('githubToken') }, ids.github);
+  log(`${ids.github.created ? 'created' : 'kept'} ${ids.github.name}`);
+  if (settings.googleClientId && secrets.get('googleClientSecret')) {
+    ids.youtube = await n.ensureCredential('youtube',
+      { clientId: settings.googleClientId, clientSecret: secrets.get('googleClientSecret') }, ids.youtube);
+    log(`${ids.youtube.created ? 'created' : 'kept'} ${ids.youtube.name}`);
+  } else {
+    delete ids.youtube;
+  }
+  const body = buildWorkflow(workspace.template(settings.repoDir), ids, {
+    folder: settings.onedriveFolder, repo: settings.githubRepo, branch: gh.defaultBranch,
+    hours: settings.postEveryHours, timezone: settings.timezone, uploader: settings.uploader,
+  });
+  const wf = await n.upsertWorkflow(body, ids.workflow);
+  ids.workflow = wf.id;
+  saveSettings({ n8nIds: ids });
+  log(`${wf.created ? 'created' : 'updated'} the workflow "${body.name}" (${wf.id})`);
+  log('Next: open each OAuth credential in n8n and click "Connect", then Activate.');
+}
+
+const ACTIONS = {
+  async 'workspace.choose'() {
+    const r = await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'], defaultPath: settings.repoDir });
+    if (!r.canceled) saveSettings({ repoDir: r.filePaths[0] });
+  },
+  async 'workspace.copy'(_v, log) {
+    if (!workspace.bundleDir) return log('running from the repo: nothing to copy');
+    await stopEngine();
+    workspace.sync(settings.repoDir);
+    pythonStale = true;
+    log(`copied the scripts into ${settings.repoDir}`);
+    startEngine();
+  },
+  'tools.install': ({ id }, log) => setup.installTool(id, { voicestudioUrl: settings.voicestudioUrl }, log),
+  async 'python.sync'(_v, log) {
+    const r = await setup.syncPython(settings.repoDir, log);
+    pythonStale = false;
+    await restartEngine();
+    return r;
+  },
+  'claude.login': () => setup.claudeLogin(),
+  'voicestudio.test': () => setup.testVoiceStudio(settings.voicestudioUrl),
+  'voicestudio.timeout': () => setup.setVoiceStudioTimeout(),
+  'save': values => saveSetup(values),
+  'microsoft.connect': () => connectOneDrive(),
+  'microsoft.disconnect': () => disconnectOneDrive(),
+  'github.openChrome': () => setup.openChromeForYouTube(path.join(app.getPath('userData'), 'yt-session-profile')),
+  async 'github.capture'(_v, log) {
+    const { session, cookies } = await setup.captureYouTubeSession();
+    log(`read ${cookies} YouTube/Google cookies`);
+    const gh = github();
+    await gh.setSecret('YT_SESSION', session);
+    log('saved YT_SESSION on GitHub');
+    await gh.setSecret('SECRETS_PAT', secrets.get('githubToken'));
+    log('saved SECRETS_PAT (lets each upload run keep the session fresh)');
+    saveSettings({ sessionSavedAt: new Date().toISOString() });
+  },
+  'workflow.create': (_v, log) => createWorkflow(log),
+  async 'workflow.activate'(_v, log) {
+    await n8nClient().activate(settings.n8nIds.workflow);
+    log('activated');
+  },
+  'open': ({ url }) => { if (/^https?:\/\//.test(url)) shell.openExternal(url); },
+};
+
+handle('setup-check', async step => {
+  try {
+    return await CHECKS[step]();
+  } catch (e) {
+    return { ok: false, message: e.message };
+  }
+});
+handle('setup-action', async ({ action, values }) => {
+  const step = action.split('.')[0];
+  const log = setupLog(step);
+  try {
+    const result = await ACTIONS[action](values || {}, log);
+    return { ok: true, result };
+  } catch (e) {
+    log(`error: ${e.message}`);
+    return { ok: false, error: e.message };
+  }
+});
+handle('setup-secrets', () => secrets.masked());
+
 // ------------------------------------------------------------------ windows
 
 function createWindow(show = true) {
@@ -654,8 +856,17 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on('second-instance', showWindow);
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     loadSettings();
+    secrets = new Secrets(path.join(app.getPath('userData'), 'secrets.bin'), safeStorage);
+    workspace = new Workspace(app.isPackaged ? path.join(process.resourcesPath, 'workspace') : null);
+    // An app update brings new scripts: copy them over an existing workspace right away.
+    const ws = workspace.status(settings.repoDir);
+    if (ws.needsCopy && ws.installed) {
+      workspace.sync(settings.repoDir);
+      pythonStale = true;
+    }
+    await setup.refreshPath();
     drive = makeDrive();
     protocol.handle('media', req => {
       const file = decodeURIComponent(new URL(req.url).pathname.slice(1));

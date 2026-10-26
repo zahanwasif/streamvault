@@ -74,7 +74,7 @@ function showTab(name) {
   document.querySelectorAll('.nav').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.id === `tab-${name}`));
   if (name === 'shorts') loadShorts();
-  if (name === 'settings') runChecks();
+  if (name === 'setup' && !Object.keys(setupState).length) refreshSetup();
   try { localStorage.setItem('tab', name); } catch { /* ignore */ }
 }
 document.querySelectorAll('.nav').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
@@ -352,10 +352,6 @@ $('#open-output').addEventListener('click', () => sv.showFolder());
 
 function fillSettings(s) {
   settings = s;
-  $('#s-clientid').value = s.msClientId || '';
-  $('#s-odfolder').value = s.onedriveFolder || 'StreamVault';
-  $('#s-repo').value = s.repoDir || '';
-  $('#s-voicestudio').value = s.voicestudioUrl || '';
   $('#s-minscore').value = s.minScore || 0;
   $('#s-maxshorts').value = s.maxShorts || 0;
   $('#s-delete').checked = !!s.deleteVideo;
@@ -365,21 +361,8 @@ function fillSettings(s) {
   seg($('#prio-files'), s.defaultPriority || 'normal');
 }
 
-document.querySelectorAll('[data-pick]').forEach(b => b.addEventListener('click', async () => {
-  const dir = await sv.pickFolder();
-  if (dir) $(`#${b.dataset.pick}`).value = dir;
-}));
-
-const oneDriveFields = () => ({
-  msClientId: $('#s-clientid').value.trim(),
-  onedriveFolder: $('#s-odfolder').value.trim().replace(/^\/+|\/+$/g, '') || 'StreamVault',
-});
-
 $('#save-settings').addEventListener('click', async () => {
   const s = await sv.setSettings({
-    ...oneDriveFields(),
-    repoDir: $('#s-repo').value.trim(),
-    voicestudioUrl: $('#s-voicestudio').value.trim() || 'http://127.0.0.1:3900',
     minScore: Number($('#s-minscore').value) || 0,
     maxShorts: Number($('#s-maxshorts').value) || 0,
     defaultPriority: $('#s-priority').dataset.value,
@@ -389,22 +372,14 @@ $('#save-settings').addEventListener('click', async () => {
   fillSettings(s);
   $('#settings-saved').textContent = 'Saved';
   setTimeout(() => { $('#settings-saved').textContent = ''; }, 2500);
-  runChecks();
 });
+$('#restart-engine').addEventListener('click', () => { sv.restartEngine(); toast('Restarting the engine'); });
 
-const CHECK_LABEL = { voicestudio: 'VoiceStudio', claude: 'Claude Code', uv: 'uv', onedrive: 'OneDrive', repo: 'StreamVault folder' };
+const errText = e => String(e && e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
 
-// ------------------------------------------------------------------ OneDrive
+// ------------------------------------------------------------------ OneDrive sign-in dialog
 
-function showOneDrive(st) {
-  const pill = $('#od-pill');
-  pill.textContent = st.signedIn ? 'Connected' : st.configured ? 'Not connected' : 'Not set up';
-  pill.className = `pill ${st.signedIn ? 'ok' : 'bad'}`;
-  $('#od-account').textContent = st.signedIn
-    ? `Signed in as ${st.account ? `${st.account.name} (${st.account.email})` : 'your Microsoft account'}. Shorts upload to ${st.folder}/ready/ in your online OneDrive, where n8n picks them up.`
-    : "Shorts upload to the online OneDrive folder below, where n8n picks them up. The OneDrive desktop app isn't needed.";
-  $('#od-disconnect').style.display = st.signedIn ? '' : 'none';
-  $('#od-connect').textContent = st.signedIn ? 'Reconnect' : 'Connect OneDrive';
+function showOneDriveLogin(st) {
   const modal = $('#od-modal');
   if (st.login) {
     $('#od-code').textContent = st.login.code;
@@ -415,17 +390,6 @@ function showOneDrive(st) {
   }
   if (st.error) toast(st.error, 'bad');
 }
-
-$('#od-connect').addEventListener('click', async () => {
-  try {
-    fillSettings(await sv.setSettings(oneDriveFields()));
-    showOneDrive(await sv.connectOneDrive());
-  } catch (e) { toast(String(e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), 'bad'); }
-});
-$('#od-disconnect').addEventListener('click', async () => {
-  if (!confirm('Disconnect OneDrive? New Shorts will wait on this PC until you connect again.')) return;
-  await sv.disconnectOneDrive();
-});
 $('#od-open').addEventListener('click', e => sv.openExternal(e.currentTarget.dataset.url));
 $('#od-copy').addEventListener('click', () => {
   navigator.clipboard.writeText($('#od-code').textContent).then(() => toast('Code copied'));
@@ -433,8 +397,8 @@ $('#od-copy').addEventListener('click', () => {
 $('#od-cancel').addEventListener('click', () => sv.cancelOneDrive());
 sv.onOneDriveStatus(st => {
   const wasLogin = $('#od-modal').classList.contains('show');
-  showOneDrive(st);
-  if (wasLogin && st.signedIn) { toast('OneDrive connected'); loadShorts(); }
+  showOneDriveLogin(st);
+  if (wasLogin && st.signedIn) { toast('OneDrive connected'); loadShorts(); checkStep('microsoft'); }
 });
 
 function showUpload(u) {
@@ -451,14 +415,258 @@ function showUpload(u) {
 }
 sv.onUploadStatus(showUpload);
 sv.onShortsChanged(loadShortsSoon);
-async function runChecks() {
-  $('#checks').replaceChildren(el('dt', {}, 'Checking…'));
-  const r = await sv.runChecks();
-  $('#checks').replaceChildren(...Object.entries(r).flatMap(([k, v]) => [
-    el('dt', { class: v.ok ? 'ok' : 'bad' }, CHECK_LABEL[k] || k), el('dd', {}, v.message)]));
+
+// ------------------------------------------------------------------ Setup tab
+
+const setupState = {};   // step id -> last check result
+const setupLogs = {};    // step id -> lines
+let secretsMasked = {};
+
+const copyBtn = (text, label = 'Copy') => el('button', { class: 'ghost sm', onclick: () =>
+  navigator.clipboard.writeText(text).then(() => toast('Copied')) }, label);
+const link = (url, label) => el('button', { class: 'link', onclick: () => sv.openExternal(url) }, label || url);
+const val = id => { const x = document.getElementById(id); return x ? x.value.trim() : ''; };
+
+function input(id, label, { value = '', secret, placeholder, hint, type = 'text' } = {}) {
+  return el('label', { class: 'field' }, label, hint ? el('small', {}, hint) : null,
+    el('input', { id, value, type: secret ? 'password' : type, placeholder: secret && value ? '' : placeholder || '',
+      autocomplete: 'off', spellcheck: 'false' }));
 }
-$('#run-checks').addEventListener('click', runChecks);
-$('#restart-engine').addEventListener('click', () => { sv.restartEngine(); toast('Restarting the engine'); });
+
+async function act(action, values, { quiet } = {}) {
+  if (action === 'workflow.create') {  // the workflow card's choices are saved right before Create/Update
+    await sv.setupAction('save', { postEveryHours: Number(val('st-wf-hours')) || 4,
+      timezone: val('st-wf-tz') || 'America/New_York', uploader: val('st-wf-up') || 'browser' });
+    settings = await sv.getSettings();
+  }
+  const r = await sv.setupAction(action, values);
+  if (!r.ok) toast(r.error, 'bad');
+  else if (!quiet) toast('Done');
+  return r;
+}
+
+function button(label, action, { primary, values, after, confirmText } = {}) {
+  return el('button', { class: `${primary ? 'primary' : 'ghost'} sm`, onclick: async e => {
+    if (confirmText && !confirm(confirmText)) return;
+    const b = e.currentTarget;
+    b.disabled = true;
+    const old = b.textContent;
+    b.textContent = 'Working…';
+    try {
+      const r = await act(action, typeof values === 'function' ? values() : values, { quiet: true });
+      if (r.ok && r.result && r.result.message) toast(r.result.message, r.result.ok === false ? 'bad' : '');
+      if (after) await after(r);
+    } finally {
+      b.disabled = false;
+      b.textContent = old;
+    }
+  } }, label);
+}
+
+async function save(values, recheck) {
+  await sv.setupAction('save', values);
+  secretsMasked = await sv.setupSecrets();
+  settings = await sv.getSettings();
+  for (const s of [].concat(recheck)) await checkStep(s);
+}
+
+const STEPS = [
+  { id: 'workspace', title: 'Workspace folder',
+    blurb: 'Where StreamVault keeps its scripts, downloads, transcripts and Shorts. Long streams are several GB each: pick a drive with plenty of space.',
+    body: st => [
+      el('div', { class: 'row' }, el('code', { class: 'path' }, st.dir || settings.repoDir), el('span', { class: 'grow' }),
+        button('Choose folder', 'workspace.choose', { after: () => checkStep('workspace') }),
+        st.needsCopy ? button(st.installed ? 'Update scripts' : 'Copy scripts', 'workspace.copy', { primary: true, after: () => refreshSetup() }) : null),
+    ] },
+  { id: 'tools', title: 'Tools',
+    blurb: 'Programs StreamVault uses. Install opens the official installer for each one (winget, or the vendor script); Windows may ask for permission.',
+    body: st => [
+      el('table', { class: 'tools' }, Object.entries(st.tools || {}).map(([id, t]) => el('tr', {},
+        el('td', {}, el('span', { class: `dot2 ${t.ok ? 'ok' : 'bad'}` }), el('strong', {}, t.name), el('small', {}, t.why)),
+        el('td', { class: 'msg' }, t.message),
+        el('td', {}, t.ok ? null : button('Install', 'tools.install', { primary: true, values: { id }, after: () => checkStep('tools') }))))),
+      el('p', { class: 'hint' }, 'VoiceStudio has to be running for its check to pass: start it from the Start menu after installing.'),
+    ] },
+  { id: 'python', title: 'Python environment',
+    blurb: 'Installs the Python packages the scripts need (uv sync) and links the video-use skill for Claude Code. A few minutes the first time.',
+    body: () => [el('div', { class: 'row' }, el('span', { class: 'grow' }),
+      button('Set up Python environment', 'python.sync', { primary: true, after: () => checkStep('python') }))] },
+  { id: 'claude', title: 'Claude sign-in',
+    blurb: 'Claude Code picks the best moments and renders each Short, using your Claude subscription.',
+    body: () => [el('div', { class: 'row' }, el('span', { class: 'hint' }, 'Opens a window that signs you in through the browser. Come back and press Re-check when it says you’re logged in.'),
+      el('span', { class: 'grow' }), button('Sign in to Claude', 'claude.login', { primary: true }))] },
+  { id: 'voicestudio', title: 'VoiceStudio model',
+    blurb: 'Free transcription on your GPU.',
+    body: () => [
+      el('ol', { class: 'steps' },
+        el('li', {}, 'Open VoiceStudio → ', el('b', {}, 'Model Catalogue → ASR'), ', choose ', el('b', {}, 'WhisperX (large-v3)'), ' and let it download.'),
+        el('li', {}, 'Make sure it runs on ', el('b', {}, 'CUDA (float16)'), ', not CPU.'),
+        el('li', {}, 'Allow long files, then restart VoiceStudio: ', button('Allow 1-hour files', 'voicestudio.timeout'))),
+      el('div', { class: 'row' }, input('st-vs-url', 'VoiceStudio address', { value: settings.voicestudioUrl }), el('span', { class: 'grow' }),
+        el('button', { class: 'ghost sm', onclick: () => save({ voicestudioUrl: val('st-vs-url') || 'http://127.0.0.1:3900' }, ['voicestudio', 'tools']) }, 'Save'),
+        button('Test transcription', 'voicestudio.test', { primary: true })),
+    ] },
+  { id: 'n8n', title: 'n8n server',
+    blurb: 'Where the poster runs. The app creates and updates the workflow there through n8n’s API.',
+    body: st => [
+      el('div', { class: 'row wrap' },
+        input('st-n8n-url', 'n8n address', { value: settings.n8nUrl, placeholder: 'https://n8n.example.com' }),
+        input('st-n8n-key', 'API key', { secret: true, value: secretsMasked.n8nApiKey, placeholder: secretsMasked.n8nApiKey || 'n8n → Settings → n8n API → Create an API key' })),
+      el('div', { class: 'row' }, el('span', { class: 'grow' }),
+        el('button', { class: 'primary sm', onclick: () => save({ n8nUrl: val('st-n8n-url').replace(/\/+$/, ''), n8nApiKey: val('st-n8n-key') }, ['n8n', 'microsoft']) }, 'Save and test')),
+      st.redirectUrl ? el('p', { class: 'hint' }, 'OAuth redirect URL (used in the next steps): ', el('code', {}, st.redirectUrl), ' ', copyBtn(st.redirectUrl)) : null,
+    ] },
+  { id: 'microsoft', title: 'Microsoft account (OneDrive)',
+    blurb: 'One Azure app lets both this app and n8n use your OneDrive. Register it once:',
+    body: st => {
+      const redirect = setupState.n8n && setupState.n8n.redirectUrl;
+      return [
+        el('ol', { class: 'steps' },
+          el('li', {}, 'Open ', link('https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade', 'App registrations'), ' → ', el('b', {}, 'New registration'), '. Name: StreamVault.'),
+          el('li', {}, 'Supported account types: ', el('b', {}, 'any organizational directory and personal Microsoft accounts'), '.'),
+          el('li', {}, 'Redirect URI: ', el('b', {}, 'Web'), ', ', redirect ? el('code', {}, redirect) : el('i', {}, '(finish the n8n step first)'), ' ', redirect ? copyBtn(redirect) : null, '. Register.'),
+          el('li', {}, el('b', {}, 'Authentication'), ' → Advanced settings → ', el('b', {}, 'Allow public client flows: Yes'), ' → Save.'),
+          el('li', {}, el('b', {}, 'Certificates & secrets'), ' → New client secret. Copy its ', el('b', {}, 'Value'), ' below, with the Application (client) ID from Overview.')),
+        el('div', { class: 'row wrap' },
+          input('st-ms-id', 'Application (client) ID', { value: settings.msClientId, placeholder: '00000000-0000-0000-0000-000000000000' }),
+          input('st-ms-secret', 'Client secret value', { secret: true, placeholder: secretsMasked.msClientSecret || 'paste the secret value' }),
+          input('st-od-folder', 'Folder in OneDrive', { value: settings.onedriveFolder || 'StreamVault' })),
+        el('div', { class: 'row' },
+          st.signedIn ? el('span', { class: 'hint' }, `Signed in as ${st.account ? st.account.email : 'your account'}`) : null,
+          el('span', { class: 'grow' }),
+          el('button', { class: 'ghost sm', onclick: () => save({ msClientId: val('st-ms-id'), msClientSecret: val('st-ms-secret'),
+            onedriveFolder: val('st-od-folder').replace(/^\/+|\/+$/g, '') || 'StreamVault' }, 'microsoft') }, 'Save'),
+          st.signedIn ? button('Disconnect', 'microsoft.disconnect', { confirmText: 'Disconnect OneDrive? New Shorts wait on this PC until you connect again.', after: () => checkStep('microsoft') }) : null,
+          el('button', { class: 'primary sm', onclick: async () => {
+            await save({ msClientId: val('st-ms-id'), msClientSecret: val('st-ms-secret'),
+              onedriveFolder: val('st-od-folder').replace(/^\/+|\/+$/g, '') || 'StreamVault' }, []);
+            try { showOneDriveLogin(await sv.connectOneDrive()); } catch (e) { toast(errText(e), 'bad'); }
+          } }, st.signedIn ? 'Reconnect OneDrive' : 'Connect OneDrive')),
+      ];
+    } },
+  { id: 'github', title: 'GitHub + YouTube sign-in (Studio uploader)',
+    blurb: 'Until Google audits your API project, n8n posts by starting a GitHub Actions run that uploads through YouTube Studio with your saved sign-in. Automating Studio is against YouTube’s terms; the channel can be flagged.',
+    body: st => [
+      el('ol', { class: 'steps' },
+        el('li', {}, link('https://github.com/settings/personal-access-tokens/new', 'Create a fine-grained token'), ': only the ', el('b', {}, settings.githubRepo), ' repository; permissions ',
+          el('b', {}, 'Actions: Read and write'), ' and ', el('b', {}, 'Secrets: Read and write'), '.'),
+        el('li', {}, 'Save it here, then open Chrome, sign in to YouTube Studio with the channel’s account, and save the session.')),
+      el('div', { class: 'row wrap' },
+        input('st-gh-repo', 'Repository', { value: settings.githubRepo, placeholder: 'owner/name' }),
+        input('st-gh-token', 'Token', { secret: true, placeholder: secretsMasked.githubToken || 'github_pat_…' })),
+      el('div', { class: 'row' }, el('span', { class: 'grow' }),
+        el('button', { class: 'ghost sm', onclick: () => save({ githubRepo: val('st-gh-repo'), githubToken: val('st-gh-token') }, 'github') }, 'Save and check'),
+        button('1. Open Chrome', 'github.openChrome'),
+        button('2. Save YouTube session', 'github.capture', { primary: true, after: () => checkStep('github') })),
+    ] },
+  { id: 'youtubeApi', title: 'YouTube API (optional)', optional: true,
+    blurb: 'For after Google approves your API project’s audit; then n8n uploads directly, with no browser. Skip it for now if you like.',
+    body: () => {
+      const redirect = setupState.n8n && setupState.n8n.redirectUrl;
+      return [
+        el('ol', { class: 'steps' },
+          el('li', {}, 'In ', link('https://console.cloud.google.com/apis/library/youtube.googleapis.com', 'Google Cloud'), ', enable ', el('b', {}, 'YouTube Data API v3'), '.'),
+          el('li', {}, 'OAuth consent screen: External, then Publishing status ', el('b', {}, 'In production'), ' (in Testing, sign-ins expire after 7 days).'),
+          el('li', {}, 'Credentials → OAuth client → ', el('b', {}, 'Web application'), ', redirect URI ', redirect ? el('code', {}, redirect) : el('i', {}, '(n8n step)'), ' ', redirect ? copyBtn(redirect) : null, '.'),
+          el('li', {}, 'Submit the ', link('https://support.google.com/youtube/contact/yt_api_form', 'API audit'), '; until it’s approved, API uploads stay private.')),
+        el('div', { class: 'row wrap' },
+          input('st-g-id', 'Client ID', { value: settings.googleClientId }),
+          input('st-g-secret', 'Client secret', { secret: true, placeholder: secretsMasked.googleClientSecret || '' })),
+        el('div', { class: 'row' }, el('span', { class: 'grow' }),
+          el('button', { class: 'ghost sm', onclick: () => save({ googleClientId: val('st-g-id'), googleClientSecret: val('st-g-secret') }, ['youtubeApi', 'workflow']) }, 'Save')),
+      ];
+    } },
+  { id: 'workflow', title: 'n8n posting workflow',
+    blurb: 'Creates the credentials and the "StreamVault: post Shorts" workflow on your n8n from the built-in template, or updates them after you change something above.',
+    body: st => {
+      const ytSet = setupState.youtubeApi && setupState.youtubeApi.set;
+      const hours = [1, 2, 3, 4, 6, 8, 12, 24];
+      const creds = st.credentials || {};
+      return [
+        el('div', { class: 'row wrap' },
+          el('label', { class: 'field' }, 'Post every', el('select', { id: 'st-wf-hours' },
+            hours.map(h => el('option', { value: h, selected: Number(settings.postEveryHours) === h }, h === 24 ? 'day' : `${h} hour${h > 1 ? 's' : ''}`)))),
+          input('st-wf-tz', 'Time zone', { value: settings.timezone, hint: 'the audience’s, e.g. America/New_York' }),
+          el('label', { class: 'field' }, 'Upload through', el('select', { id: 'st-wf-up' },
+            el('option', { value: 'browser', selected: settings.uploader !== 'api' }, 'YouTube Studio (GitHub Actions)'),
+            el('option', { value: 'api', selected: settings.uploader === 'api', disabled: !ytSet }, 'YouTube API (after the audit)')))),
+        el('div', { class: 'row' }, el('span', { class: 'grow' }),
+          button(st.exists ? 'Update workflow in n8n' : 'Create workflow in n8n', 'workflow.create',
+            { primary: !st.exists, after: () => checkStep('workflow') }),
+          st.exists && !st.active ? button('Activate', 'workflow.activate', { primary: true, after: () => checkStep('workflow') }) : null,
+          st.url ? el('button', { class: 'ghost sm', onclick: () => sv.openExternal(st.url) }, 'Open in n8n') : null),
+        Object.keys(creds).length ? el('div', { class: 'creds' }, el('span', { class: 'hint' }, 'In n8n, open each sign-in credential and click Connect, once:'),
+          ['onedrive', 'youtube'].filter(k => creds[k]).map(k => el('button', { class: 'ghost sm', onclick: () => sv.openExternal(creds[k].url) },
+            `Connect ${k === 'onedrive' ? 'OneDrive' : 'YouTube'} in n8n`))) : null,
+        st.executions && st.executions.length ? el('table', { class: 'execs' },
+          el('tr', {}, el('th', {}, 'Recent runs'), el('th', {}, '')),
+          st.executions.map(x => el('tr', {}, el('td', {}, new Date(x.startedAt).toLocaleString()),
+            el('td', { class: `st-${x.status === 'success' ? 'done' : x.status === 'error' ? 'failed' : 'queued'}` }, x.status)))) : null,
+      ];
+    } },
+];
+
+function renderStep(step, i) {
+  const st = setupState[step.id] || { message: 'Checking…' };
+  const card = document.getElementById(`step-${step.id}`) || el('article', { class: 'step', id: `step-${step.id}` });
+  const status = st.checking ? 'Checking…' : st.ok ? (step.optional && !st.set ? 'Skipped' : 'Done') : step.optional ? 'Optional' : 'To do';
+  const lines = setupLogs[step.id] || [];
+  card.className = `step ${st.ok ? 'ok' : 'todo'}`;
+  card.replaceChildren(
+    el('div', { class: 'step-head' },
+      el('span', { class: 'num' }, st.ok ? '✓' : String(i + 1)),
+      el('div', { class: 'step-title' }, el('h2', {}, step.title), el('small', {}, st.message || '')),
+      el('span', { class: `pill ${st.ok ? 'ok' : step.optional ? '' : 'bad'}` }, status),
+      el('button', { class: 'link', onclick: () => checkStep(step.id) }, 'Re-check')),
+    el('p', { class: 'blurb' }, step.blurb),
+    ...[...step.body(st),
+      lines.length ? el('pre', { class: 'log', id: `setup-log-${step.id}` }, lines.join('\n')) : null].filter(Boolean));
+  return card;
+}
+
+// Re-render one card (or all). Re-rendering only the card that changed keeps what you typed elsewhere.
+function renderSetup(onlyId) {
+  const box = $('#steps');
+  STEPS.forEach((s, i) => {
+    if (onlyId && s.id !== onlyId && document.getElementById(`step-${s.id}`)) return;
+    const c = renderStep(s, i);
+    if (!c.parentNode) box.append(c);
+  });
+  const todo = STEPS.filter(s => !s.optional && !(setupState[s.id] && setupState[s.id].ok)).length;
+  $('#badge-setup').textContent = todo || '';
+  const pre = box.querySelectorAll('pre.log');
+  pre.forEach(p => { p.scrollTop = p.scrollHeight; });
+  return todo;
+}
+
+async function checkStep(id) {
+  setupState[id] = { ...(setupState[id] || {}), checking: true };
+  renderSetup(id);
+  const r = await sv.setupCheck(id);
+  setupState[id] = id === 'tools'
+    ? { tools: r, ok: Object.values(r).every(t => t.ok || t.optional), message: Object.values(r).filter(t => !t.ok).length
+      ? `${Object.values(r).filter(t => !t.ok).length} missing: ${Object.values(r).filter(t => !t.ok).map(t => t.name).join(', ')}` : 'all installed' }
+    : r;
+  renderSetup(id);
+  // Steps that show values from another step's check.
+  if (id === 'n8n') { renderSetup('microsoft'); renderSetup('youtubeApi'); }
+  if (id === 'youtubeApi') renderSetup('workflow');
+  return setupState[id];
+}
+
+async function refreshSetup() {
+  secretsMasked = await sv.setupSecrets();
+  settings = await sv.getSettings();
+  for (const s of STEPS) await checkStep(s.id);
+}
+
+sv.onSetupLog(({ step, line }) => {
+  const arr = setupLogs[step] || (setupLogs[step] = []);
+  arr.push(line);
+  if (arr.length > 300) arr.shift();
+  const pre = document.getElementById(`setup-log-${step}`);
+  if (pre) { pre.textContent = arr.join('\n'); pre.scrollTop = pre.scrollHeight; } else renderSetup(step);
+});
 
 // ------------------------------------------------------------------ engine status + events
 
@@ -517,11 +725,17 @@ sv.onEvent(ev => {
   Object.values(state.jobs || {}).forEach(j => jobs.set(j.id, j));
   setEngine(engine);
   showUpload(upload);
-  showOneDrive(await sv.oneDriveStatus());
+  showOneDriveLogin(await sv.oneDriveStatus());
   engineLog.forEach(appendEngineLog);
   renderJobs();
   loadShorts();
+  // Until setup is complete the app opens on Setup.
+  secretsMasked = await sv.setupSecrets();
+  STEPS.forEach(s => { setupState[s.id] = { checking: true }; });
+  renderSetup();
   let tab = 'add';
   try { tab = localStorage.getItem('tab') || 'add'; } catch { /* ignore */ }
   showTab(tab);
+  await refreshSetup();
+  if (renderSetup() > 0 && tab !== 'setup') showTab('setup');
 })();

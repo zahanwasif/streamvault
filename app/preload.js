@@ -21,6 +21,10 @@ contextBridge.exposeInMainWorld('api', {
   disconnectOneDrive: () => call('onedrive-disconnect'),
   uploadNow: () => call('upload-now'),
 
+  setupCheck: step => call('setup-check', step),
+  setupAction: (action, values) => call('setup-action', { action, values }),
+  setupSecrets: () => call('setup-secrets'),
+
   addLinks: (links, section, priority) => call('add-links', { links, section, priority }),
   addFiles: (files, priority) => call('add-files', { files, priority }),
   pickFiles: () => call('pick-files'),
@@ -45,4 +49,5 @@ contextBridge.exposeInMainWorld('api', {
   onUploadStatus: on('upload-status'),
   onOneDriveStatus: on('onedrive-status'),
   onShortsChanged: on('shorts-changed'),
+  onSetupLog: on('setup-log'),
 });

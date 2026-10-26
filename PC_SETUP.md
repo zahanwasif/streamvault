@@ -1,6 +1,8 @@
 # StreamVault: setup guide for the desktop PC (RTX 3080, Ryzen 7 5700X3D)
 
-**For Claude:** the user asked you to set up StreamVault on this PC. Work through this file top to bottom, and keep the task list current.
+**The StreamVault app's Setup tab now does all of this** (install it from `QUEUE_SETUP.md` §1). This file is the manual fallback, and a record of the pitfalls the app works around.
+
+**For Claude:** if the user asks you to set StreamVault up by hand on this PC, work through this file top to bottom, and keep the task list current.
 
 ## What StreamVault is
 

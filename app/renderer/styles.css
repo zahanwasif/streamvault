@@ -278,3 +278,41 @@ select.p-low { color: var(--low); }
   margin: 16px 0; padding: 14px; border-radius: 10px; text-align: center; letter-spacing: 0.18em;
   font: 700 28px/1 ui-monospace, Consolas, monospace; background: var(--panel-2); user-select: all;
 }
+
+/* ---------- setup */
+.step {
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 16px 18px; margin-bottom: 12px;
+}
+.step.ok { opacity: 0.92; }
+.step.todo { border-left: 3px solid var(--accent); }
+.step-head { display: flex; align-items: center; gap: 12px; }
+.step-head h2 { margin: 0; }
+.step-title { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.step-title small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.num {
+  width: 28px; height: 28px; flex: none; border-radius: 50%; display: grid; place-items: center;
+  background: var(--panel-2); font-weight: 700; font-size: 13px;
+}
+.step.ok .num { background: color-mix(in srgb, var(--ok) 20%, transparent); color: var(--ok); }
+.blurb { color: var(--muted); margin: 10px 0 12px; max-width: 820px; }
+.step .row { margin-top: 10px; align-items: flex-end; }
+.step .row .field input { min-width: 240px; }
+ol.steps { margin: 0 0 6px; padding-left: 20px; line-height: 1.9; }
+ol.steps code, .hint code, code.path {
+  font: 12.5px ui-monospace, Consolas, monospace; background: var(--panel-2); padding: 2px 6px; border-radius: 5px;
+  overflow-wrap: anywhere;
+}
+code.path { padding: 6px 10px; align-self: center; }
+table.tools, table.execs { width: 100%; border-collapse: collapse; }
+table.tools td, table.execs td, table.execs th { padding: 7px 6px; border-bottom: 1px solid var(--line); vertical-align: middle; text-align: left; }
+table.tools td:first-child { width: 42%; }
+table.tools td:first-child strong { margin-right: 8px; }
+table.tools td.msg { color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+table.tools td:last-child { width: 1%; white-space: nowrap; text-align: right; }
+table.execs th { color: var(--muted); font-weight: 600; font-size: 12.5px; }
+.dot2 { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; background: var(--muted); }
+.dot2.ok { background: var(--ok); }
+.dot2.bad { background: var(--bad); }
+.creds { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
+td.st-done { color: var(--ok); } td.st-failed { color: var(--bad); } td.st-queued { color: var(--muted); }

@@ -11,6 +11,9 @@
   <aside class="sidebar">
     <div class="brand"><img src="../assets/icon.png" alt=""><span>StreamVault</span></div>
     <nav>
+      <button class="nav" data-tab="setup">
+        <svg viewBox="0 0 24 24"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg><span>Setup</span><b class="badge" id="badge-setup"></b>
+      </button>
       <button class="nav active" data-tab="add">
         <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>Add</span>
       </button>
@@ -35,6 +38,15 @@
   </aside>
 
   <main>
+    <!-- Setup -->
+    <section class="tab" id="tab-setup">
+      <header>
+        <h1>Setup</h1>
+        <p>Everything StreamVault needs, in order. Each step checks itself; fix the red ones top to bottom. Nothing installs or changes until you click its button.</p>
+      </header>
+      <div id="steps"></div>
+    </section>
+
     <!-- Add -->
     <section class="tab active" id="tab-add">
       <header><h1>Add videos</h1><p>Links or files go into the queue. The PC downloads each one, transcribes it with VoiceStudio, picks the best moments and uploads the Shorts to your online OneDrive.</p></header>
@@ -101,30 +113,10 @@
 
     <!-- Settings -->
     <section class="tab" id="tab-settings">
-      <header><h1>Settings</h1></header>
-      <div class="card">
-        <div class="row"><h2>OneDrive</h2><span class="grow"></span><span class="pill" id="od-pill">Not connected</span></div>
-        <p class="hint" id="od-account">Shorts upload to the online OneDrive folder below, where n8n picks them up. The OneDrive desktop app isn't needed.</p>
-        <div class="row wrap">
-          <label class="field grow-field">Microsoft app (client) ID <small>from your Azure app registration (public client flows on)</small><input id="s-clientid" placeholder="00000000-0000-0000-0000-000000000000"></label>
-          <label class="field">Folder in OneDrive <small>must match n8n</small><input id="s-odfolder" placeholder="StreamVault"></label>
-        </div>
-        <div class="row">
-          <span class="grow"></span>
-          <button class="ghost" id="od-disconnect">Disconnect</button>
-          <button class="primary" id="od-connect">Connect OneDrive</button>
-        </div>
-      </div>
-      <div class="card">
-        <h2>Folders</h2>
-        <label class="field">StreamVault folder <small>the cloned repo, with clipper/ and video-use/</small>
-          <div class="pick"><input id="s-repo"><button class="ghost" data-pick="s-repo">Browse</button></div>
-        </label>
-      </div>
+      <header><h1>Settings</h1><p>How Shorts are made. Accounts, folders and tools are in Setup.</p></header>
       <div class="card">
         <h2>Processing</h2>
         <div class="row wrap">
-          <label class="field">VoiceStudio URL<input id="s-voicestudio"></label>
           <label class="field">Minimum score <small>0 = skill default (7)</small><input id="s-minscore" type="number" min="0" max="10" step="1"></label>
           <label class="field">Max Shorts per video <small>0 = skill default (15)</small><input id="s-maxshorts" type="number" min="0" max="50"></label>
           <div class="field">Default priority <div class="seg" id="s-priority"></div></div>
@@ -136,10 +128,6 @@
         <span class="grow"></span>
         <span class="hint" id="settings-saved"></span>
         <button class="primary" id="save-settings">Save</button>
-      </div>
-      <div class="card">
-        <div class="row"><h2>Checks</h2><span class="grow"></span><button class="ghost" id="run-checks">Run again</button></div>
-        <dl class="checks" id="checks"></dl>
       </div>
       <div class="card">
         <div class="row"><h2>Engine output</h2><span class="grow"></span><button class="ghost" id="restart-engine">Restart engine</button></div>
