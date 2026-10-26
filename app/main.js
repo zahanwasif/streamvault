@@ -242,17 +242,35 @@ function listShorts() {
       const local = post.slug && post.rendered_file
         ? path.join(settings.repoDir, 'shorts', post.slug, post.rendered_file) : null;
       const video = local && fs.existsSync(local) ? local : path.join(folder, post.video || 'video.mp4');
+      // A result.json still in ready/ means n8n never finished with it: the upload failed for this
+      // Short (copyright), was never confirmed, or went up but couldn't be moved. n8n skips these.
+      const shot = path.join(settings.outputDir, 'failures', `${name}.jpg`);
       out.push({
         id: name,
         where,
-        status: where === 'posted' ? 'posted' : post.hold ? 'held' : 'waiting',
+        status: where === 'posted' ? 'posted' : result ? 'check' : post.hold ? 'held' : 'waiting',
         post,
         result,
         videoUrl: fs.existsSync(video) ? `media://local/${encodeURIComponent(video)}` : null,
+        screenshotUrl: where === 'ready' && result && fs.existsSync(shot) ? `media://local/${encodeURIComponent(shot)}` : null,
       });
     }
   }
   return out;
+}
+
+// A Short under "Needs a look": try again (drop result.json) or record it as posted (move it).
+function resolveCheck(id, action) {
+  const ready = path.join(settings.outputDir, 'ready');
+  const folder = path.join(ready, id);
+  if (!isInside(folder, ready) || !fs.existsSync(folder)) throw new Error('This Short is not in ready/ any more');
+  if (action === 'retry') {
+    fs.rmSync(path.join(folder, 'result.json'), { force: true });
+  } else if (action === 'posted') {
+    const dest = path.join(settings.outputDir, 'posted', id);
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.renameSync(folder, dest);
+  }
 }
 
 function savePost(id, patch) {
@@ -359,6 +377,7 @@ handle('job-log', id => {
 });
 handle('list-shorts', listShorts);
 handle('save-post', ({ id, patch }) => savePost(id, patch));
+handle('resolve-check', ({ id, action }) => resolveCheck(id, action));
 handle('open-external', url => {
   if (/^https?:\/\//.test(url)) shell.openExternal(url);
 });

@@ -3,9 +3,9 @@
   "nodes": [
     {
       "parameters": {
-        "content": "## StreamVault: post the next Short\n\nRuns every 4 hours. Looks at every folder in **OneDrive/StreamVault/ready/**, skips Shorts on hold, and picks the highest priority (set in the StreamVault app), then the best score, then the oldest. Uploads its video.mp4 to YouTube with the title, description and tags from post.json, writes result.json next to it and moves the folder to **posted/**.\n\nNothing waiting = nothing happens. A failed upload leaves the Short in ready/ for next time.\n\n**Change how often:** open *Every 4 hours* and edit the cron (minute hour …).\n**Privacy, category, language:** top of *Build upload*.",
-        "width": 520,
-        "height": 380
+        "content": "## StreamVault: post the next Short\n\nRuns every 4 hours. Looks at every folder in **OneDrive/StreamVault/ready/**, skips Shorts on hold, and picks the highest priority (set in the StreamVault app), then the best score, then the oldest. Uploads its video.mp4 to YouTube with the title, description and tags from post.json, writes result.json next to it and moves the folder to **posted/**.\n\n**Uploader** (top of *Build upload*): `'browser'` dispatches the GitHub workflow that uploads through YouTube Studio and waits up to 45 min for its report; `'api'` uses the YouTube Data API (needs Google's audit for public videos).\n\nNothing waiting = nothing happens. A run that fails (signed out, upload limit, Studio changed) leaves the Short in ready/ and shows red in Executions; a Short that fails itself (copyright) or never gets a report gets a result.json and is skipped from then on. Screenshots of failures go to **failures/**.\n\n**Change how often:** open *Every 4 hours* and edit the cron (minute hour …).\n**Privacy, category, language:** top of *Build upload*.",
+        "width": 560,
+        "height": 560
       },
       "id": "899b9507-c1d4-53d2-859c-3089703d78cd",
       "name": "About",
@@ -13,7 +13,7 @@
       "typeVersion": 1,
       "position": [
         -220,
-        -260
+        -380
       ]
     },
     {
@@ -130,7 +130,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Settings\nconst PRIVACY = 'public';      // 'private' or 'unlisted' to post without going live\nconst CATEGORY_ID = '24';      // Entertainment\nconst LANGUAGE = 'en';\nconst PRIORITY_RANK = { high: 0, normal: 1, low: 2 };\n\n// Rank what's waiting: priority (set in the StreamVault app), then score, then oldest.\n// Skip Shorts on hold, and ones whose video is still syncing (smaller than the PC recorded).\nconst candidates = $input.all()\n  .map((item, i) => ({ pick: $('Choose post').itemMatching(i).json, post: item.json }))\n  .filter(({ pick, post }) => !post.hold && !(post.video_bytes && post.video_bytes !== pick.videoBytes))\n  .sort((a, b) =>\n    (PRIORITY_RANK[a.post.priority] ?? 1) - (PRIORITY_RANK[b.post.priority] ?? 1)\n    || (b.post.score ?? 0) - (a.post.score ?? 0)\n    || String(a.post.exported_at ?? a.pick.folderName).localeCompare(String(b.post.exported_at ?? b.pick.folderName)));\nif (!candidates.length) return [];\nconst { pick, post } = candidates[0];\n\n// YouTube rejects < and > in titles and descriptions.\nconst clean = (s, n) => {\n  s = String(s ?? '').replace(/</g, '‹').replace(/>/g, '›').trim();\n  return s.length <= n ? s : s.slice(0, n - 1).trimEnd() + '…';\n};\nconst bytes = s => new TextEncoder().encode(s).length;\nlet description = clean(post.description, 5000);\nwhile (bytes(description) > 5000) description = description.slice(0, -50);\nconst tags = [];\nfor (const t of post.tags ?? []) {\n  const v = String(t).replace(/^#/, '').trim();\n  if (v && !tags.includes(v) && [...tags, v].join(',').length <= 480) tags.push(v);\n}\nconst title = clean(post.title, 100);\nconst lang = post.language ?? LANGUAGE;\nreturn [{ json: {\n  ...pick,\n  title,\n  priority: post.priority ?? 'normal',\n  score: post.score ?? null,\n  waiting: candidates.length,\n  request: {\n    snippet: { title, description, tags, categoryId: String(post.category_id ?? CATEGORY_ID),\n               defaultLanguage: lang, defaultAudioLanguage: lang },\n    status: { privacyStatus: PRIVACY, selfDeclaredMadeForKids: false, containsSyntheticMedia: false },\n  },\n} }];\n"
+        "jsCode": "// Settings\n// 'browser': upload through YouTube Studio on GitHub Actions (until Google's API audit is approved).\n// 'api': the YouTube Data API (public uploads need the audit).\nconst UPLOADER = 'browser';\nconst PRIVACY = 'public';      // api only: 'private' or 'unlisted' to post without going live\nconst CATEGORY_ID = '24';      // Entertainment\nconst LANGUAGE = 'en';\nconst PRIORITY_RANK = { high: 0, normal: 1, low: 2 };\n\n// Rank what's waiting: priority (set in the StreamVault app), then score, then oldest.\n// Skip Shorts on hold, and ones whose video is still syncing (smaller than the PC recorded).\nconst candidates = $input.all()\n  .map((item, i) => ({ pick: $('Choose post').itemMatching(i).json, post: item.json }))\n  .filter(({ pick, post }) => !post.hold && !(post.video_bytes && post.video_bytes !== pick.videoBytes))\n  .sort((a, b) =>\n    (PRIORITY_RANK[a.post.priority] ?? 1) - (PRIORITY_RANK[b.post.priority] ?? 1)\n    || (b.post.score ?? 0) - (a.post.score ?? 0)\n    || String(a.post.exported_at ?? a.pick.folderName).localeCompare(String(b.post.exported_at ?? b.pick.folderName)));\nif (!candidates.length) return [];\nconst { pick, post } = candidates[0];\n\n// YouTube rejects < and > in titles and descriptions.\nconst clean = (s, n) => {\n  s = String(s ?? '').replace(/</g, '‹').replace(/>/g, '›').trim();\n  return s.length <= n ? s : s.slice(0, n - 1).trimEnd() + '…';\n};\nconst bytes = s => new TextEncoder().encode(s).length;\nlet description = clean(post.description, 5000);\nwhile (bytes(description) > 5000) description = description.slice(0, -50);\nconst tags = [];\nfor (const t of post.tags ?? []) {\n  const v = String(t).replace(/^#/, '').trim();\n  if (v && !tags.includes(v) && [...tags, v].join(',').length <= 480) tags.push(v);\n}\nconst title = clean(post.title, 100);\nconst lang = post.language ?? LANGUAGE;\n// What the Studio uploader needs, as base64 JSON (a GitHub workflow input).\nconst studioPost = JSON.stringify({ id: pick.folderName, title, description, tags });\nconst postB64 = typeof Buffer !== 'undefined'\n  ? Buffer.from(studioPost, 'utf8').toString('base64')\n  : btoa(unescape(encodeURIComponent(studioPost)));\nreturn [{ json: {\n  ...pick,\n  uploader: UPLOADER,\n  postB64,\n  title,\n  priority: post.priority ?? 'normal',\n  score: post.score ?? null,\n  waiting: candidates.length,\n  request: {\n    snippet: { title, description, tags, categoryId: String(post.category_id ?? CATEGORY_ID),\n               defaultLanguage: lang, defaultAudioLanguage: lang },\n    status: { privacyStatus: PRIVACY, selfDeclaredMadeForKids: false, containsSyntheticMedia: false },\n  },\n} }];\n"
       },
       "id": "31a811f9-f5e2-5788-9b0d-d7f876dc9de5",
       "name": "Build upload",
@@ -176,8 +176,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1560,
-        300
+        1780,
+        520
       ]
     },
     {
@@ -198,8 +198,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1780,
-        300
+        2000,
+        520
       ]
     },
     {
@@ -229,8 +229,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        2000,
-        300
+        2220,
+        520
       ]
     },
     {
@@ -241,7 +241,7 @@
         "nodeCredentialType": "microsoftOneDriveOAuth2Api",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ video_id: $json.id, url: 'https://youtube.com/shorts/' + $json.id, title: $('Build upload').first().json.title, privacy: $json.status?.privacyStatus, upload_status: $json.status?.uploadStatus, posted_at: $now.toISO() }, null, 2) }}",
+        "jsonBody": "={{ JSON.stringify({ status: 'posted', video_id: $json.video_id ?? $json.id, url: $json.url ?? ('https://youtube.com/shorts/' + $json.id), title: $('Build upload').first().json.title, privacy: $json.privacy ?? $json.status?.privacyStatus, uploader: $json.uploader ?? 'api', posted_at: $now.toISO() }, null, 2) }}",
         "options": {}
       },
       "id": "7731cf65-2763-56ed-a116-9ed189471656",
@@ -249,8 +249,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        2220,
-        300
+        2880,
+        -160
       ]
     },
     {
@@ -266,8 +266,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        2440,
-        300
+        3100,
+        -160
       ]
     },
     {
@@ -286,8 +286,346 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        2660,
+        3320,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "084cf82f-140a-562e-bf0b-04751e4a64a5",
+              "leftValue": "={{ $json.uploader }}",
+              "rightValue": "browser",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a52b4972-3085-5ef5-8953-bf550a1c70e0",
+      "name": "Use Studio?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1560,
         300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.github.com/repos/zahanwasif/streamvault/actions/workflows/youtube-upload.yml/dispatches",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            },
+            {
+              "name": "X-GitHub-Api-Version",
+              "value": "2022-11-28"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ ref: 'main', inputs: { post_b64: $json.postB64, video_url: $json.videoUrl, resume_url: $execution.resumeUrl, post_id: $json.folderName } }) }}",
+        "options": {}
+      },
+      "id": "603e32bd-c85c-5610-9d10-6d4bddaf5ea6",
+      "name": "Dispatch upload",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1780,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "resume": "webhook",
+        "httpMethod": "POST",
+        "limitWaitTime": true,
+        "limitType": "afterTimeInterval",
+        "resumeAmount": 45,
+        "resumeUnit": "minutes",
+        "options": {}
+      },
+      "id": "1639d640-5c19-5a58-b638-4c29c0772481",
+      "name": "Wait for upload",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2000,
+        80
+      ],
+      "webhookId": "dab0e46b-4920-5734-905f-2fab55629ed9"
+    },
+    {
+      "parameters": {
+        "jsCode": "// What the Studio run reported. No body = the Wait node timed out (the run never called back).\nconst r = $input.first().json.body;\nconst pick = $('Build upload').first().json;\nif (!r) {\n  return [{ json: { route: 'unconfirmed', status: 'unconfirmed',\n    error: 'No report from the GitHub upload run within the time limit. Check YouTube Studio.' } }];\n}\nif (r.ok) {\n  return [{ json: { route: 'ok', video_id: r.video_id, url: r.url, privacy: r.privacy, uploader: 'studio' } }];\n}\n// kind 'post' (e.g. a copyright claim) is about this Short: mark it so it isn't retried.\n// Anything else (signed out, upload limit, Studio changed) leaves it in ready/ for the next run.\nconst out = { json: { route: r.kind === 'post' ? 'post_failed' : 'error', status: 'failed',\n                      kind: r.kind, error: r.error } };\nif (r.screenshot_b64) {\n  out.binary = { data: { data: r.screenshot_b64, mimeType: 'image/jpeg',\n                         fileName: `${pick.folderName}.jpg`, fileExtension: 'jpg' } };\n}\nreturn [out];\n"
+      },
+      "id": "f60a4fa4-28e3-525e-81ea-c7a2af1725c2",
+      "name": "Check result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2220,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "697b9f55-377a-5f08-9f5e-b80ba61373e2",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "ok",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "ok"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "43412a14-6938-5995-9800-e7583fc88887",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "unconfirmed",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "unconfirmed"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "3640f09f-9ce6-5af5-84bc-b6e4896c95ee",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "post_failed",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "post_failed"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "07168b3b-afba-5959-bd97-3a8376c22723",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "error",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "error"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "833451be-4d42-5068-95b6-68a83057de03",
+      "name": "Route",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        2440,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://graph.microsoft.com/v1.0/me/drive/items/{{ $('Build upload').first().json.folderId }}:/result.json:/content",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftOneDriveOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: $('Check result').first().json.status, kind: $('Check result').first().json.kind, error: $('Check result').first().json.error, title: $('Build upload').first().json.title, at: $now.toISO() }, null, 2) }}",
+        "options": {}
+      },
+      "id": "73dbc942-c844-52f9-9127-8040f771dda6",
+      "name": "Mark unconfirmed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://graph.microsoft.com/v1.0/me/drive/root:/StreamVault/failures/{{ $('Build upload').first().json.folderName }}.jpg:/content",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftOneDriveOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "image/jpeg"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "data",
+        "options": {}
+      },
+      "id": "f7559d1c-c8cf-50e4-90d7-59a83b7a295a",
+      "name": "Keep screenshot",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2660,
+        160
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://graph.microsoft.com/v1.0/me/drive/items/{{ $('Build upload').first().json.folderId }}:/result.json:/content",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftOneDriveOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: $('Check result').first().json.status, kind: $('Check result').first().json.kind, error: $('Check result').first().json.error, title: $('Build upload').first().json.title, at: $now.toISO() }, null, 2) }}",
+        "options": {}
+      },
+      "id": "50e52862-b9d4-5ff6-80f3-134f251b1d96",
+      "name": "Mark failed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2880,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "errorMessage": "={{ 'Studio upload failed (' + $('Check result').first().json.kind + '): ' + $('Check result').first().json.error }}"
+      },
+      "id": "155a1ac8-4908-5c6e-8f01-96b3b3f6936c",
+      "name": "Short failed",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        3100,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://graph.microsoft.com/v1.0/me/drive/root:/StreamVault/failures/{{ $('Build upload').first().json.folderName }}.jpg:/content",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftOneDriveOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "image/jpeg"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "data",
+        "options": {}
+      },
+      "id": "6bf52845-8600-5d61-a1d1-992a8e242976",
+      "name": "Keep screenshot ",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2660,
+        320
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "errorMessage": "={{ 'Studio upload failed (' + $('Check result').first().json.kind + '): ' + $('Check result').first().json.error }}"
+      },
+      "id": "e3e99e36-322a-58dd-9db7-831e9df0447b",
+      "name": "Upload failed",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        2880,
+        320
       ]
     }
   ],
@@ -351,7 +689,58 @@
       "main": [
         [
           {
+            "node": "Use Studio?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Use Studio?": {
+      "main": [
+        [
+          {
+            "node": "Dispatch upload",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
             "node": "Start YouTube upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dispatch upload": {
+      "main": [
+        [
+          {
+            "node": "Wait for upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for upload": {
+      "main": [
+        [
+          {
+            "node": "Check result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check result": {
+      "main": [
+        [
+          {
+            "node": "Route",
             "type": "main",
             "index": 0
           }
@@ -407,6 +796,71 @@
         [
           {
             "node": "Move to posted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route": {
+      "main": [
+        [
+          {
+            "node": "Save result.json",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark unconfirmed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Keep screenshot",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Keep screenshot ",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keep screenshot": {
+      "main": [
+        [
+          {
+            "node": "Mark failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark failed": {
+      "main": [
+        [
+          {
+            "node": "Short failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keep screenshot ": {
+      "main": [
+        [
+          {
+            "node": "Upload failed",
             "type": "main",
             "index": 0
           }

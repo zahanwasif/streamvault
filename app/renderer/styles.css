@@ -209,6 +209,11 @@ select.p-low { color: var(--low); }
   background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
 }
 .short.st-held { border-color: color-mix(in srgb, var(--warn) 50%, var(--line)); }
+.short.st-check { border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); }
+.short .hint { margin: 0; align-self: auto; }
+.shot { width: 100%; max-height: 220px; object-fit: contain; object-position: left top; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); }
+.chip.warn b { color: var(--bad); }
+.chip.warn.active b { color: inherit; }
 .phone { position: relative; flex: none; width: 160px; aspect-ratio: 9 / 16; border-radius: 10px; overflow: hidden; background: #000; }
 .phone video { width: 100%; height: 100%; object-fit: cover; display: block; }
 .novideo { color: #888; font-size: 12px; display: flex; height: 100%; align-items: center; justify-content: center; text-align: center; padding: 10px; }

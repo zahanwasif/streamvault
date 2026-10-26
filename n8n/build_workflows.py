@@ -13,6 +13,9 @@ GRAPH = "https://graph.microsoft.com/v1.0/me/drive"
 BASE = f"{GRAPH}/root:/StreamVault"
 OD = {"authentication": "predefinedCredentialType", "nodeCredentialType": "microsoftOneDriveOAuth2Api"}
 YT = {"authentication": "predefinedCredentialType", "nodeCredentialType": "youTubeOAuth2Api"}
+GH = {"authentication": "predefinedCredentialType", "nodeCredentialType": "githubApi"}
+GITHUB_REPO = "zahanwasif/streamvault"      # holds .github/workflows/youtube-upload.yml
+GITHUB_BRANCH = "main"                      # GitHub only dispatches workflows on the default branch
 
 
 def nid(name: str) -> str:
@@ -49,11 +52,26 @@ def note(name, x, y, w, h, text):
     return node(name, "n8n-nodes-base.stickyNote", 1, x, y, {"content": text, "width": w, "height": h})
 
 
-def chain(names):
-    conns = {}
+def link(conns, a, b, out=0):
+    outs = conns.setdefault(a, {"main": []})["main"]
+    while len(outs) <= out:
+        outs.append([])
+    outs[out].append({"node": b, "type": "main", "index": 0})
+
+
+def chain(names, conns=None):
+    conns = {} if conns is None else conns
     for a, b in zip(names, names[1:]):
-        conns.setdefault(a, {"main": [[]]})["main"][0].append({"node": b, "type": "main", "index": 0})
+        link(conns, a, b)
     return conns
+
+
+def equals(left, right):
+    """An IF/Switch condition (filter v2): left == right, as strings."""
+    return {"options": {"caseSensitive": True, "leftValue": "", "typeValidation": "strict", "version": 2},
+            "conditions": [{"id": nid(f"cond/{left}/{right}"), "leftValue": left, "rightValue": right,
+                            "operator": {"type": "string", "operation": "equals"}}],
+            "combinator": "and"}
 
 
 # ------------------------------------------------------------------ post workflow
@@ -87,7 +105,10 @@ return out;
 
 BUILD = r"""
 // Settings
-const PRIVACY = 'public';      // 'private' or 'unlisted' to post without going live
+// 'browser': upload through YouTube Studio on GitHub Actions (until Google's API audit is approved).
+// 'api': the YouTube Data API (public uploads need the audit).
+const UPLOADER = 'browser';
+const PRIVACY = 'public';      // api only: 'private' or 'unlisted' to post without going live
 const CATEGORY_ID = '24';      // Entertainment
 const LANGUAGE = 'en';
 const PRIORITY_RANK = { high: 0, normal: 1, low: 2 };
@@ -119,8 +140,15 @@ for (const t of post.tags ?? []) {
 }
 const title = clean(post.title, 100);
 const lang = post.language ?? LANGUAGE;
+// What the Studio uploader needs, as base64 JSON (a GitHub workflow input).
+const studioPost = JSON.stringify({ id: pick.folderName, title, description, tags });
+const postB64 = typeof Buffer !== 'undefined'
+  ? Buffer.from(studioPost, 'utf8').toString('base64')
+  : btoa(unescape(encodeURIComponent(studioPost)));
 return [{ json: {
   ...pick,
+  uploader: UPLOADER,
+  postB64,
   title,
   priority: post.priority ?? 'normal',
   score: post.score ?? null,
@@ -133,14 +161,43 @@ return [{ json: {
 } }];
 """
 
+
+CHECK = r"""
+// What the Studio run reported. No body = the Wait node timed out (the run never called back).
+const r = $input.first().json.body;
+const pick = $('Build upload').first().json;
+if (!r) {
+  return [{ json: { route: 'unconfirmed', status: 'unconfirmed',
+    error: 'No report from the GitHub upload run within the time limit. Check YouTube Studio.' } }];
+}
+if (r.ok) {
+  return [{ json: { route: 'ok', video_id: r.video_id, url: r.url, privacy: r.privacy, uploader: 'studio' } }];
+}
+// kind 'post' (e.g. a copyright claim) is about this Short: mark it so it isn't retried.
+// Anything else (signed out, upload limit, Studio changed) leaves it in ready/ for the next run.
+const out = { json: { route: r.kind === 'post' ? 'post_failed' : 'error', status: 'failed',
+                      kind: r.kind, error: r.error } };
+if (r.screenshot_b64) {
+  out.binary = { data: { data: r.screenshot_b64, mimeType: 'image/jpeg',
+                         fileName: `${pick.folderName}.jpg`, fileExtension: 'jpg' } };
+}
+return [out];
+"""
+
 post_nodes = [
-    note("About", -220, -260, 520, 380,
+    note("About", -220, -380, 560, 560,
          "## StreamVault: post the next Short\n\n"
          "Runs every 4 hours. Looks at every folder in **OneDrive/StreamVault/ready/**, skips Shorts "
          "on hold, and picks the highest priority (set in the StreamVault app), then the best score, "
          "then the oldest. Uploads its video.mp4 to YouTube with the title, description and tags "
          "from post.json, writes result.json next to it and moves the folder to **posted/**.\n\n"
-         "Nothing waiting = nothing happens. A failed upload leaves the Short in ready/ for next time.\n\n"
+         "**Uploader** (top of *Build upload*): `'browser'` dispatches the GitHub workflow that uploads "
+         "through YouTube Studio and waits up to 45 min for its report; `'api'` uses the YouTube Data API "
+         "(needs Google's audit for public videos).\n\n"
+         "Nothing waiting = nothing happens. A run that fails (signed out, upload limit, Studio changed) "
+         "leaves the Short in ready/ and shows red in Executions; a Short that fails itself (copyright) or "
+         "never gets a report gets a result.json and is skipped from then on. Screenshots of failures go "
+         "to **failures/**.\n\n"
          "**Change how often:** open *Every 4 hours* and edit the cron (minute hour …).\n"
          "**Privacy, category, language:** top of *Build upload*."),
     node("Every 4 hours", "n8n-nodes-base.scheduleTrigger", 1.2, 0, 200,
@@ -152,31 +209,76 @@ post_nodes = [
     code("Choose post", 900, 300, CHOOSE),
     http("Get post.json", 1120, 300, "GET", "={{ $json.postUrl }}", response={"responseFormat": "json"}),
     code("Build upload", 1340, 300, BUILD),
-    http("Start YouTube upload", 1560, 300, "POST",
+    http("Start YouTube upload", 1780, 520, "POST",
          "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status", YT,
          headers={"X-Upload-Content-Type": "video/mp4", "X-Upload-Content-Length": "={{ $json.videoBytes }}"},
          body={"specifyBody": "json", "jsonBody": "={{ JSON.stringify($json.request) }}"},
          response={"fullResponse": True}),
-    http("Download video", 1780, 300, "GET", "={{ $('Build upload').first().json.videoUrl }}",
+    http("Download video", 2000, 520, "GET", "={{ $('Build upload').first().json.videoUrl }}",
          response={"responseFormat": "file"}, timeout=600000),
-    http("Upload video", 2000, 300, "PUT", "={{ $('Start YouTube upload').first().json.headers.location }}", YT,
+    http("Upload video", 2220, 520, "PUT", "={{ $('Start YouTube upload').first().json.headers.location }}", YT,
          headers={"Content-Type": "video/mp4"},
          body={"contentType": "binaryData", "inputDataFieldName": "data"}, timeout=1800000),
-    http("Save result.json", 2220, 300, "PUT",
+    http("Save result.json", 2880, -160, "PUT",
          f"={GRAPH}/items/{{{{ $('Build upload').first().json.folderId }}}}:/result.json:/content", OD,
          body={"specifyBody": "json", "jsonBody":
-               "={{ JSON.stringify({ video_id: $json.id, url: 'https://youtube.com/shorts/' + $json.id, "
-               "title: $('Build upload').first().json.title, privacy: $json.status?.privacyStatus, "
-               "upload_status: $json.status?.uploadStatus, posted_at: $now.toISO() }, null, 2) }}"}),
-    http("Find posted folder", 2440, 300, "GET", f"{BASE}/posted", OD),
-    http("Move to posted", 2660, 300, "PATCH",
+               "={{ JSON.stringify({ status: 'posted', video_id: $json.video_id ?? $json.id, "
+               "url: $json.url ?? ('https://youtube.com/shorts/' + $json.id), "
+               "title: $('Build upload').first().json.title, privacy: $json.privacy ?? $json.status?.privacyStatus, "
+               "uploader: $json.uploader ?? 'api', posted_at: $now.toISO() }, null, 2) }}"}),
+    http("Find posted folder", 3100, -160, "GET", f"{BASE}/posted", OD),
+    http("Move to posted", 3320, -160, "PATCH",
          f"={GRAPH}/items/{{{{ $('Build upload').first().json.folderId }}}}", OD,
          body={"specifyBody": "json", "jsonBody": "={{ JSON.stringify({ parentReference: { id: $json.id } }) }}"}),
 ]
-order = ["List ready", "Pick candidates", "List files", "Choose post", "Get post.json", "Build upload",
-         "Start YouTube upload", "Download video", "Upload video", "Save result.json", "Find posted folder",
-         "Move to posted"]
-conns = chain(order)
+
+STUDIO_RESULT = ("={{ JSON.stringify({ status: $('Check result').first().json.status, "
+                 "kind: $('Check result').first().json.kind, error: $('Check result').first().json.error, "
+                 "title: $('Build upload').first().json.title, at: $now.toISO() }, null, 2) }}")
+FAIL_MSG = ("={{ 'Studio upload failed (' + $('Check result').first().json.kind + '): ' "
+            "+ $('Check result').first().json.error }}")
+SHOT_URL = f"={BASE}/failures/{{{{ $('Build upload').first().json.folderName }}}}.jpg:/content"
+browser_nodes = [
+    node("Use Studio?", "n8n-nodes-base.if", 2.2, 1560, 300,
+         {"conditions": equals("={{ $json.uploader }}", "browser"), "options": {}}),
+    http("Dispatch upload", 1780, 80, "POST",
+         f"https://api.github.com/repos/{GITHUB_REPO}/actions/workflows/youtube-upload.yml/dispatches", GH,
+         headers={"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"},
+         body={"specifyBody": "json", "jsonBody":
+               "={{ JSON.stringify({ ref: '" + GITHUB_BRANCH + "', inputs: { post_b64: $json.postB64, "
+               "video_url: $json.videoUrl, resume_url: $execution.resumeUrl, post_id: $json.folderName } }) }}"}),
+    node("Wait for upload", "n8n-nodes-base.wait", 1.1, 2000, 80,
+         {"resume": "webhook", "httpMethod": "POST", "limitWaitTime": True, "limitType": "afterTimeInterval",
+          "resumeAmount": 45, "resumeUnit": "minutes", "options": {}}, webhookId=nid("wait-webhook")),
+    code("Check result", 2220, 80, CHECK),
+    node("Route", "n8n-nodes-base.switch", 3.2, 2440, 80, {"rules": {"values": [
+        {"conditions": equals("={{ $json.route }}", r), "renameOutput": True, "outputKey": r}
+        for r in ("ok", "unconfirmed", "post_failed", "error")]}, "options": {}}),
+    http("Mark unconfirmed", 2660, 0, "PUT",
+         f"={GRAPH}/items/{{{{ $('Build upload').first().json.folderId }}}}:/result.json:/content", OD,
+         body={"specifyBody": "json", "jsonBody": STUDIO_RESULT}),
+    http("Keep screenshot", 2660, 160, "PUT", SHOT_URL, OD, headers={"Content-Type": "image/jpeg"},
+         body={"contentType": "binaryData", "inputDataFieldName": "data"}, onError="continueRegularOutput"),
+    http("Mark failed", 2880, 160, "PUT",
+         f"={GRAPH}/items/{{{{ $('Build upload').first().json.folderId }}}}:/result.json:/content", OD,
+         body={"specifyBody": "json", "jsonBody": STUDIO_RESULT}),
+    node("Short failed", "n8n-nodes-base.stopAndError", 1, 3100, 160, {"errorMessage": FAIL_MSG}),
+    http("Keep screenshot ", 2660, 320, "PUT", SHOT_URL, OD, headers={"Content-Type": "image/jpeg"},
+         body={"contentType": "binaryData", "inputDataFieldName": "data"}, onError="continueRegularOutput"),
+    node("Upload failed", "n8n-nodes-base.stopAndError", 1, 2880, 320, {"errorMessage": FAIL_MSG}),
+]
+post_nodes += browser_nodes
+conns = chain(["List ready", "Pick candidates", "List files", "Choose post", "Get post.json", "Build upload",
+               "Use Studio?", "Dispatch upload", "Wait for upload", "Check result", "Route"])
+link(conns, "Use Studio?", "Start YouTube upload", out=1)
+chain(["Start YouTube upload", "Download video", "Upload video", "Save result.json", "Find posted folder",
+       "Move to posted"], conns)
+link(conns, "Route", "Save result.json", out=0)
+link(conns, "Route", "Mark unconfirmed", out=1)
+link(conns, "Route", "Keep screenshot", out=2)
+chain(["Keep screenshot", "Mark failed", "Short failed"], conns)
+link(conns, "Route", "Keep screenshot ", out=3)
+chain(["Keep screenshot ", "Upload failed"], conns)
 conns["Every 4 hours"] = {"main": [[{"node": "List ready", "type": "main", "index": 0}]]}
 conns["Test now"] = {"main": [[{"node": "List ready", "type": "main", "index": 0}]]}
 

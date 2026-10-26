@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src media:">
+        content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: media:; media-src media:">
   <title>StreamVault</title>
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -83,6 +83,7 @@
           <button class="chip active" data-filter="waiting">Waiting <b id="n-waiting">0</b></button>
           <button class="chip" data-filter="held">On hold <b id="n-held">0</b></button>
           <button class="chip" data-filter="posted">Posted <b id="n-posted">0</b></button>
+          <button class="chip warn" data-filter="check">Needs a look <b id="n-check">0</b></button>
         </div>
         <span class="grow"></span>
         <button class="ghost" id="open-output">Open folder</button>

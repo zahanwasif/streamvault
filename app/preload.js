@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('api', {
 
   listShorts: () => call('list-shorts'),
   savePost: (id, patch) => call('save-post', { id, patch }),
+  resolveCheck: (id, action) => call('resolve-check', { id, action }),
   openExternal: url => call('open-external', url),
   showFolder: which => call('show-folder', which),
 

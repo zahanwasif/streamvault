@@ -18,6 +18,10 @@ inbox/*
 app/node_modules/
 app/dist/
 
+# Studio uploader: failure screenshots/HTML and saved sessions (as good as a password)
+uploader/out/
+*session*.b64
+
 # Secrets
 .env
 .env.*

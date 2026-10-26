@@ -219,7 +219,7 @@ async function loadShorts() {
 }
 
 function renderShorts() {
-  const counts = { waiting: 0, held: 0, posted: 0 };
+  const counts = { waiting: 0, held: 0, posted: 0, check: 0 };
   shorts.forEach(s => { counts[s.status]++; });
   for (const k of Object.keys(counts)) $(`#n-${k}`).textContent = counts[k];
   $('#badge-shorts').textContent = counts.waiting || '';
@@ -231,12 +231,14 @@ function renderShorts() {
     waiting: 'No Shorts waiting. Finished videos show up here once they reach OneDrive.',
     held: 'Nothing on hold. Shorts that failed the self-check land here for review.',
     posted: 'Nothing posted yet. n8n moves Shorts to posted/ after uploading them.',
+    check: 'Nothing needs a look. Shorts whose upload failed or was never confirmed show up here.',
   }[filter];
   $('#shorts').replaceChildren(...list.map((s, i) => shortCard(s, filter === 'waiting' && i === 0)));
 }
 
 function shortCard(s, nextUp) {
   const p = s.post;
+  if (s.status === 'check') return checkCard(s);
   const editable = s.where === 'ready';
   const title = el('input', { value: p.title || '', maxlength: 100, disabled: !editable });
   const count = el('small', { class: 'count' }, `${(p.title || '').length}/100`);
@@ -293,6 +295,40 @@ function shortCard(s, nextUp) {
         el('span', { class: 'grow' }),
         editable ? holdBtn : null,
         editable ? save : null)));
+}
+
+const CHECK_TEXT = {
+  failed: 'The upload failed for this Short',
+  unconfirmed: 'The upload was never confirmed',
+  posted: 'Posted, but n8n could not move it to posted/',
+};
+function checkCard(s) {
+  const p = s.post;
+  const r = s.result || {};
+  const act = action => async () => {
+    try {
+      await sv.resolveCheck(s.id, action);
+      toast(action === 'retry' ? 'Back in the queue: n8n will try it again' : 'Moved to posted');
+      loadShorts();
+    } catch (e) { toast(String(e.message || e), 'bad'); }
+  };
+  return el('article', { class: 'short st-check' },
+    el('div', { class: 'phone' }, s.videoUrl ? el('video', { src: s.videoUrl, controls: true, preload: 'metadata' })
+      : el('div', { class: 'novideo' }, 'Video not on this PC')),
+    el('div', { class: 'short-body' },
+      el('div', { class: 'tags-row' }, el('strong', {}, p.title), el('span', { class: 'grow' }),
+        p.score != null ? el('span', { class: 'pill score' }, `${p.score}/10`) : null),
+      el('p', { class: 'flag' }, `${CHECK_TEXT[r.status] || 'n8n left a result for this Short'}`,
+        r.kind && r.kind !== 'post' ? ` (${r.kind})` : '', r.error ? `: ${r.error}` : ''),
+      r.status === 'unconfirmed' || r.status === 'posted'
+        ? el('p', { class: 'hint' }, 'Look for it in YouTube Studio. If it is there, mark it posted; if not, try again.')
+        : el('p', { class: 'hint' }, 'Fix the cause (for a copyright claim, usually skip this Short), then try again or leave it.'),
+      s.screenshotUrl ? el('img', { class: 'shot', src: s.screenshotUrl, alt: 'Studio when the upload failed' }) : null,
+      el('div', { class: 'row' },
+        el('span', { class: 'grow' }),
+        r.url ? el('button', { class: 'link', onclick: () => sv.openExternal(r.url) }, 'Open on YouTube') : null,
+        el('button', { class: 'ghost sm', onclick: act('posted') }, 'Mark posted'),
+        el('button', { class: 'primary sm', onclick: act('retry') }, 'Try again'))));
 }
 
 document.querySelectorAll('#filters .chip').forEach(c => c.addEventListener('click', () => {
