@@ -39,6 +39,7 @@ from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page, TimeoutError as PlaywrightTimeout, sync_playwright
 
 UPLOAD_URL = "https://www.youtube.com/upload"   # redirects into Studio's upload dialog
+STUDIO_URL = "https://studio.youtube.com"
 OUT = Path(__file__).resolve().parent / "out"
 
 SELECTORS = {
@@ -57,8 +58,17 @@ SELECTORS = {
     "progress": "ytcp-video-upload-progress",
     "published_close": "ytcp-video-share-dialog #close-button, #close-button",
     "dialog_close": "ytcp-uploads-dialog #close-button",
+    # Studio's "Improve your experience: unsupported browser" page
+    "skip_unsupported": 'a:has-text("Skip to YouTube Studio"), button:has-text("Skip to YouTube Studio"), '
+                        'ytcp-button:has-text("Skip to YouTube Studio"), :text-is("SKIP TO YOUTUBE STUDIO")',
+    # welcome / what's-new dialogs that can cover the dashboard
+    "dismiss": '#dismiss-button, ytcp-button#close-button, tp-yt-paper-dialog button:has-text("Got it"), '
+               'tp-yt-paper-dialog button:has-text("Continue")',
+    "create": "#create-icon",
+    "upload_menu": '#text-item-0, tp-yt-paper-item:has-text("Upload videos")',
 }
 # Text Studio shows (English UI; the context forces en-US).
+UNSUPPORTED_TEXT = re.compile(r"unsupported browser|old browser version", re.I)
 LIMIT_TEXT = re.compile(r"daily upload limit", re.I)
 COPYRIGHT_TEXT = re.compile(r"copyright[- ]protected content found|copyright claim", re.I)
 CHECKS_DONE = re.compile(r"checks complete|no issues found", re.I)
@@ -107,6 +117,68 @@ def page_text(page: Page) -> str:
         return ""
 
 
+def where(page: Page) -> str:
+    """Which page we're on, for error messages: title and path only (the Actions log is public)."""
+    try:
+        url = page.url.split("?")[0].split("#")[0]
+        return f"page \"{page.title()[:80]}\" at {url}"
+    except PlaywrightError:
+        return "page unknown"
+
+
+def skip_unsupported(page: Page) -> bool:
+    """Click through Studio's "unsupported browser" page if it's showing. True if it was."""
+    if not UNSUPPORTED_TEXT.search(page_text(page)):
+        return False
+    try:
+        page.locator(SELECTORS["skip_unsupported"]).first.click(timeout=10_000)
+        page.wait_for_load_state("domcontentloaded", timeout=30_000)
+        page.wait_for_timeout(3000)
+        print("note: skipped Studio's unsupported-browser page", file=sys.stderr)
+    except PlaywrightTimeout:
+        raise UploadFailed("studio", f"Studio says this browser is unsupported and its Skip link wasn't found ({where(page)})") from None
+    return True
+
+
+def dismiss_dialogs(page: Page) -> None:
+    for _ in range(3):
+        try:
+            page.locator(SELECTORS["dismiss"]).first.click(timeout=2000)
+            page.wait_for_timeout(800)
+        except PlaywrightError:
+            return
+
+
+def open_upload_dialog(page: Page, start_url: str) -> None:
+    """Get to a page with the upload file input: the upload URL first, then Create → Upload videos."""
+    page.goto(start_url, wait_until="domcontentloaded", timeout=60_000)
+    page.wait_for_timeout(3000)
+    check_blockers(page)
+    if skip_unsupported(page):
+        check_blockers(page)
+    file_input = page.locator(SELECTORS["file_input"]).first
+    try:
+        file_input.wait_for(state="attached", timeout=15_000)
+        return
+    except PlaywrightTimeout:
+        pass
+    # Fallback: open Studio and use its Create menu.
+    studio = STUDIO_URL if start_url == UPLOAD_URL else start_url.split("/upload")[0] + "/studio"
+    if not page.url.startswith(studio):
+        page.goto(studio, wait_until="domcontentloaded", timeout=60_000)
+        page.wait_for_timeout(3000)
+        check_blockers(page)
+        skip_unsupported(page)
+    dismiss_dialogs(page)
+    try:
+        page.locator(SELECTORS["create"]).first.click(timeout=30_000)
+        page.locator(SELECTORS["upload_menu"]).first.click(timeout=10_000)
+        file_input.wait_for(state="attached", timeout=30_000)
+    except PlaywrightTimeout:
+        check_blockers(page)
+        raise UploadFailed("studio", f"Studio's upload dialog did not open ({where(page)})") from None
+
+
 def check_blockers(page: Page) -> None:
     if "accounts.google.com" in page.url or "ServiceLogin" in page.url:
         raise UploadFailed("session", "Signed out of YouTube: run uploader/capture_session.py again")
@@ -119,7 +191,7 @@ def click(page: Page, key: str, timeout: float = 30_000) -> None:
         page.locator(SELECTORS[key]).first.click(timeout=timeout)
     except PlaywrightTimeout:
         check_blockers(page)
-        raise UploadFailed("studio", f"Studio element not found: {key} ({SELECTORS[key]})") from None
+        raise UploadFailed("studio", f"Studio element not found: {key} ({where(page)})") from None
 
 
 def wait_for_upload(page: Page, timeout_s: int, checks_grace_s: int = 120) -> str:
@@ -150,15 +222,12 @@ def wait_for_upload(page: Page, timeout_s: int, checks_grace_s: int = 120) -> st
 
 def upload(page: Page, video: Path, post: dict, dry_run: bool, upload_timeout: int,
            checks_grace: int = 120, start_url: str = UPLOAD_URL) -> dict:
-    page.goto(start_url, wait_until="domcontentloaded", timeout=60_000)
-    page.wait_for_timeout(3000)
-    check_blockers(page)
-
+    open_upload_dialog(page, start_url)
     try:
         page.locator(SELECTORS["file_input"]).first.set_input_files(str(video), timeout=45_000)
     except PlaywrightTimeout:
         check_blockers(page)
-        raise UploadFailed("studio", "Studio's upload dialog did not open") from None
+        raise UploadFailed("studio", f"Studio's upload dialog did not open ({where(page)})") from None
 
     # Details
     title = page.locator(SELECTORS["title"]).first
@@ -166,7 +235,7 @@ def upload(page: Page, video: Path, post: dict, dry_run: bool, upload_timeout: i
         title.wait_for(timeout=60_000)
     except PlaywrightTimeout:
         check_blockers(page)
-        raise UploadFailed("studio", "details form did not appear after choosing the file") from None
+        raise UploadFailed("studio", f"details form did not appear after choosing the file ({where(page)})") from None
     title.fill(post["title"][:100])
     page.locator(SELECTORS["description"]).first.fill(post.get("description", "")[:5000])
     click(page, "not_for_kids")
