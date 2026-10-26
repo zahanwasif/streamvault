@@ -147,7 +147,7 @@ Keep it short.
 ## Posting to YouTube (only when the user asks)
 Not part of the automatic run: publishing is outward-facing, so it waits for the user to ask.
 
-Sources that came through the queue (`clipper/run_queue.py`, see `QUEUE_SETUP.md`) are exported to OneDrive `ready/` and posted by n8n on its schedule: don't also upload those by hand. Use `clipper/export_posts.py shorts/<slug>` to hand a manually clipped source to that same queue.
+Sources added in the StreamVault desktop app (`app/`, engine `clipper/run_queue.py`, see `QUEUE_SETUP.md`) are exported to OneDrive `ready/` and posted by n8n every 4 hours: don't also upload those by hand. The app's runs arrive with the transcript, `takes_packed.md` and `signals.md` already made, so they start at step 3. Use `clipper/export_posts.py shorts/<slug> --priority high|normal|low` to hand a manually clipped source to the same poster.
 
 1. Write `shorts/<slug>/posts_copy.json` (format in `clipper/plan_posts.py`'s docstring): per Short a title (≤ 100 chars, creator name near the front), the hook as a quote, a one-sentence setup, 5 topical tags and 2 extra hashtags. The description gets a credit line with the source URL, so only use "with permission" if the user said they have it.
 2. `$PY clipper/plan_posts.py shorts/<slug>` assigns hourly US Eastern slots (best-scored Shorts at 12, 13, 18–20 h), writes a `youtube` block into each meta JSON and `shorts/<slug>/schedule.md`. Shorts already published or scheduled are skipped.

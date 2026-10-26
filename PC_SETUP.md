@@ -100,8 +100,8 @@ In `clipper/transcribe_long.py`, add `--engine local|scribe`. The default comes 
 2. **Local transcription:** run `fetch.py https://www.youtube.com/watch?v=jNQXAC9IVRw` (19 s), then `transcribe_long.py --engine local`, then `pack_transcripts.py`. Check the word times look right, and report how long it took.
 3. **End to end:** the user pastes a real stream URL. Run the shorts-clipper skill fully automatically and report the transcription speed (minutes per hour of audio).
 
-## 9. Queue and scheduled posting
-Once the pipeline works, set up the OneDrive link queue and n8n posting: follow `QUEUE_SETUP.md`.
+## 9. Desktop app and scheduled posting
+Once the pipeline works, set up the StreamVault desktop app (add links and videos, review Shorts) and the n8n poster: follow `QUEUE_SETUP.md`.
 
 ## Pitfalls already solved (don't redo)
 - **Captions failing on Windows:** the `.as_posix()` patch in step 2 fixes this.

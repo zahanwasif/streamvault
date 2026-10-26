@@ -3,7 +3,7 @@
   "nodes": [
     {
       "parameters": {
-        "content": "## StreamVault: post the next Short\n\nRuns at each posting time (America/New_York, set in workflow settings). Takes the oldest folder in **OneDrive/StreamVault/ready/**, uploads its video.mp4 to YouTube with the copy from post.json, writes result.json next to it and moves the folder to **posted/**.\n\nNothing ready = nothing happens. A failed upload leaves the post in ready/ for the next slot.\n\n**Change the times:** open *Posting times* and edit the cron (minute hour …).\n**Privacy, category, language:** top of *Build upload*.",
+        "content": "## StreamVault: post the next Short\n\nRuns every 4 hours. Looks at every folder in **OneDrive/StreamVault/ready/**, skips Shorts on hold, and picks the highest priority (set in the StreamVault app), then the best score, then the oldest. Uploads its video.mp4 to YouTube with the title, description and tags from post.json, writes result.json next to it and moves the folder to **posted/**.\n\nNothing waiting = nothing happens. A failed upload leaves the Short in ready/ for next time.\n\n**Change how often:** open *Every 4 hours* and edit the cron (minute hour …).\n**Privacy, category, language:** top of *Build upload*.",
         "width": 520,
         "height": 380
       },
@@ -22,13 +22,13 @@
           "interval": [
             {
               "field": "cronExpression",
-              "expression": "0 12,16,19 * * *"
+              "expression": "0 */4 * * *"
             }
           ]
         }
       },
-      "id": "dd51d00d-11b2-5def-94d3-49e29100a530",
-      "name": "Posting times",
+      "id": "4e815419-6de1-5cb9-b023-9c7839d493b7",
+      "name": "Every 4 hours",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [
@@ -66,7 +66,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Post ids start with the export time, then the clip's rank: sorting by name = oldest source first,\n// best Short first. Look at the first few so a post that is still syncing doesn't block the slot.\nconst kids = $input.first().json.value ?? [];\nreturn kids\n  .filter(k => k.folder && !/^[._]/.test(k.name))\n  .sort((a, b) => a.name.localeCompare(b.name))\n  .slice(0, 5)\n  .map(k => ({ json: { folderId: k.id, folderName: k.name } }));\n"
+        "jsCode": "// Every folder waiting in ready/. Which one posts is decided in Build upload, from post.json.\nconst kids = $input.first().json.value ?? [];\nreturn kids\n  .filter(k => k.folder && !/^[._]/.test(k.name))\n  .slice(0, 200)\n  .map(k => ({ json: { folderId: k.id, folderName: k.name } }));\n"
       },
       "id": "bd8145eb-66e3-5f37-8915-aa7296deeb2c",
       "name": "Pick candidates",
@@ -130,7 +130,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Settings\nconst PRIVACY = 'public';      // 'private' or 'unlisted' to post without going live\nconst CATEGORY_ID = '24';      // Entertainment\nconst LANGUAGE = 'en';\n\n// YouTube rejects < and > in titles and descriptions.\nconst clean = (s, n) => {\n  s = String(s ?? '').replace(/</g, '‹').replace(/>/g, '›').trim();\n  return s.length <= n ? s : s.slice(0, n - 1).trimEnd() + '…';\n};\nconst bytes = s => new TextEncoder().encode(s).length;\n\nconst posts = $input.all();\nfor (let i = 0; i < posts.length; i++) {\n  const pick = $('Choose post').itemMatching(i).json;\n  const post = posts[i].json;\n  // The PC records the video size; a smaller file in OneDrive is still uploading.\n  if (post.video_bytes && post.video_bytes !== pick.videoBytes) continue;\n\n  let description = clean(post.description, 5000);\n  while (bytes(description) > 5000) description = description.slice(0, -50);\n  const tags = [];\n  for (const t of post.tags ?? []) {\n    const v = String(t).replace(/^#/, '').trim();\n    if (v && !tags.includes(v) && [...tags, v].join(',').length <= 480) tags.push(v);\n  }\n  const title = clean(post.title, 100);\n  const lang = post.language ?? LANGUAGE;\n  return [{ json: {\n    ...pick,\n    title,\n    request: {\n      snippet: { title, description, tags, categoryId: String(post.category_id ?? CATEGORY_ID),\n                 defaultLanguage: lang, defaultAudioLanguage: lang },\n      status: { privacyStatus: PRIVACY, selfDeclaredMadeForKids: false, containsSyntheticMedia: false },\n    },\n  } }];\n}\nreturn [];\n"
+        "jsCode": "// Settings\nconst PRIVACY = 'public';      // 'private' or 'unlisted' to post without going live\nconst CATEGORY_ID = '24';      // Entertainment\nconst LANGUAGE = 'en';\nconst PRIORITY_RANK = { high: 0, normal: 1, low: 2 };\n\n// Rank what's waiting: priority (set in the StreamVault app), then score, then oldest.\n// Skip Shorts on hold, and ones whose video is still syncing (smaller than the PC recorded).\nconst candidates = $input.all()\n  .map((item, i) => ({ pick: $('Choose post').itemMatching(i).json, post: item.json }))\n  .filter(({ pick, post }) => !post.hold && !(post.video_bytes && post.video_bytes !== pick.videoBytes))\n  .sort((a, b) =>\n    (PRIORITY_RANK[a.post.priority] ?? 1) - (PRIORITY_RANK[b.post.priority] ?? 1)\n    || (b.post.score ?? 0) - (a.post.score ?? 0)\n    || String(a.post.exported_at ?? a.pick.folderName).localeCompare(String(b.post.exported_at ?? b.pick.folderName)));\nif (!candidates.length) return [];\nconst { pick, post } = candidates[0];\n\n// YouTube rejects < and > in titles and descriptions.\nconst clean = (s, n) => {\n  s = String(s ?? '').replace(/</g, '‹').replace(/>/g, '›').trim();\n  return s.length <= n ? s : s.slice(0, n - 1).trimEnd() + '…';\n};\nconst bytes = s => new TextEncoder().encode(s).length;\nlet description = clean(post.description, 5000);\nwhile (bytes(description) > 5000) description = description.slice(0, -50);\nconst tags = [];\nfor (const t of post.tags ?? []) {\n  const v = String(t).replace(/^#/, '').trim();\n  if (v && !tags.includes(v) && [...tags, v].join(',').length <= 480) tags.push(v);\n}\nconst title = clean(post.title, 100);\nconst lang = post.language ?? LANGUAGE;\nreturn [{ json: {\n  ...pick,\n  title,\n  priority: post.priority ?? 'normal',\n  score: post.score ?? null,\n  waiting: candidates.length,\n  request: {\n    snippet: { title, description, tags, categoryId: String(post.category_id ?? CATEGORY_ID),\n               defaultLanguage: lang, defaultAudioLanguage: lang },\n    status: { privacyStatus: PRIVACY, selfDeclaredMadeForKids: false, containsSyntheticMedia: false },\n  },\n} }];\n"
       },
       "id": "31a811f9-f5e2-5788-9b0d-d7f876dc9de5",
       "name": "Build upload",
@@ -413,7 +413,7 @@
         ]
       ]
     },
-    "Posting times": {
+    "Every 4 hours": {
       "main": [
         [
           {

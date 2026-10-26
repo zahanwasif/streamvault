@@ -3,17 +3,19 @@
     <OneDrive>/StreamVault/ready/<post id>/video.mp4
     <OneDrive>/StreamVault/ready/<post id>/post.json     (written last, so n8n never sees half a post)
 
-The post id is `<export time>_<NN>_<slug>`, so n8n's "oldest first" order posts sources in the order
-they were processed and, within a source, the best-scored Short first. The OneDrive desktop client
-does the upload; n8n moves each folder to posted/ once YouTube has it.
+The post id is `<export time>_<NN>_<slug>`. n8n posts the waiting post with the highest `priority`
+(high/normal/low, set per video in the app), then the highest `score`, then the oldest; it skips
+posts with `"hold": true`. The OneDrive desktop client does the upload; n8n moves each folder to
+posted/ once YouTube has it.
 
 Copy comes from shorts/<slug>/posts_copy.json when it has an entry for the Short (see
-plan_posts.py), else from the meta JSON's title/description/hashtags. Shorts that are flagged
-("flagged" in the meta), already exported, or already posted by hand are skipped. Each exported
-meta JSON gets a `queue` block recording where it went.
+plan_posts.py), else from the meta JSON's title/description/hashtags. Shorts flagged in the
+self-check ("flagged" in the meta) are exported on hold, for review in the app. Shorts already
+exported or already posted by hand are skipped. Each exported meta JSON gets a `queue` block
+recording where it went.
 
 Usage:
-    python clipper/export_posts.py shorts/<slug> [--to <OneDrive>/StreamVault] [--min-score 7]
+    python clipper/export_posts.py shorts/<slug> [--to <OneDrive>/StreamVault] [--priority high] [--min-score 7]
 """
 
 from __future__ import annotations
@@ -47,6 +49,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Copy rendered Shorts into OneDrive ready/ for n8n")
     ap.add_argument("folder", type=Path, help="shorts/<slug>")
     ap.add_argument("--to", type=Path, help="OneDrive StreamVault folder (default: STREAMVAULT_ONEDRIVE)")
+    ap.add_argument("--priority", choices=["high", "normal", "low"], default="normal")
     ap.add_argument("--min-score", type=float, default=0)
     args = ap.parse_args()
 
@@ -67,7 +70,6 @@ def main() -> None:
         nn = meta_path.name[:2]
         why = ("no rendered video" if not video.exists()
                else "already exported" if meta.get("queue", {}).get("exported_at")
-               else f"flagged: {meta['flagged']}" if meta.get("flagged")
                else "already posted" if meta.get("youtube", {}).get("studio_status") in ("published", "scheduled")
                else "below min score" if meta.get("score", 10) < args.min_score
                else "")
@@ -84,11 +86,15 @@ def main() -> None:
             "version": 1,
             "id": post_id,
             **post_for(meta, nn, copy),
+            "priority": args.priority,
+            "hold": bool(meta.get("flagged")),
+            "flag": meta.get("flagged"),
             "category": meta.get("category"),
             "score": meta.get("score"),
             "creator": meta.get("creator"),
             "source_url": meta.get("source_url"),
             "source_timestamps": meta.get("source_timestamps"),
+            "slug": slug,
             "rendered_file": video.name,
             "video": "video.mp4",
             "video_bytes": video.stat().st_size,
@@ -100,7 +106,7 @@ def main() -> None:
 
         meta["queue"] = {"exported_at": post["exported_at"], "post_id": post_id}
         meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
-        print(f"READY {dest}")
+        print(f"READY {dest}" + (f"  (on hold: {meta['flagged']})" if meta.get("flagged") else ""))
         exported += 1
 
     print(f"exported {exported}, skipped {skipped}")

@@ -11,8 +11,12 @@ inbox/*
 *.webm
 *.wav
 
-# Queue worker state and logs
+# Engine state and logs
 .worker/
+
+# Desktop app
+app/node_modules/
+app/dist/
 
 # Secrets
 .env

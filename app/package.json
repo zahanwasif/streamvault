@@ -1,0 +1,23 @@
+{
+  "name": "streamvault",
+  "productName": "StreamVault",
+  "version": "1.0.0",
+  "description": "Add links or videos; the PC turns them into Shorts and puts them in OneDrive for the n8n poster.",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win"
+  },
+  "devDependencies": {
+    "electron": "44.7.0",
+    "electron-builder": "26.17.0"
+  },
+  "build": {
+    "appId": "com.streamvault.desktop",
+    "productName": "StreamVault",
+    "files": ["main.js", "preload.js", "renderer/**", "assets/**"],
+    "win": { "target": "nsis", "icon": "assets/icon.png" },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true }
+  }
+}
