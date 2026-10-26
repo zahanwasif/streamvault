@@ -249,3 +249,32 @@ select.p-low { color: var(--low); }
 @media (max-width: 1000px) {
   .grid { grid-template-columns: 1fr; }
 }
+
+/* ---------- OneDrive */
+.upload {
+  display: none; margin-top: 8px; gap: 10px; align-items: flex-start;
+  padding: 10px; border-radius: 10px; background: var(--panel-2);
+}
+.upload.show { display: flex; }
+.upload svg { width: 18px; height: 18px; flex: none; margin-top: 2px; fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.upload.bad svg { stroke: var(--bad); }
+.upload div { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.upload small { overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.upload .bar { height: 4px; border-radius: 2px; background: var(--line); margin-top: 6px; overflow: hidden; }
+.upload .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width 0.3s; }
+.pill.ok { color: var(--ok); }
+.pill.bad { color: var(--bad); }
+.grow-field { flex: 1; }
+.banner:empty { display: none; }
+.banner { margin: 0 0 14px; padding: 10px 14px; border-radius: 10px; color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, transparent); font-weight: 550; }
+.modal {
+  position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+  background: rgb(0 0 0 / 0.5); z-index: 10;
+}
+.modal.show { display: flex; }
+.dialog { width: min(480px, 92vw); padding: 22px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line); }
+.dialog p { color: var(--muted); }
+.code {
+  margin: 16px 0; padding: 14px; border-radius: 10px; text-align: center; letter-spacing: 0.18em;
+  font: 700 28px/1 ui-monospace, Consolas, monospace; background: var(--panel-2); user-select: all;
+}

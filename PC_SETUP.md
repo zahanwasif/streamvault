@@ -101,7 +101,7 @@ In `clipper/transcribe_long.py`, add `--engine local|scribe`. The default comes 
 3. **End to end:** the user pastes a real stream URL. Run the shorts-clipper skill fully automatically and report the transcription speed (minutes per hour of audio).
 
 ## 9. Desktop app and scheduled posting
-Once the pipeline works, set up the StreamVault desktop app (add links and videos, review Shorts) and the n8n poster: follow `QUEUE_SETUP.md`.
+Once the pipeline works, set up the StreamVault desktop app (add links and videos, upload Shorts to online OneDrive, review them) and the n8n poster: follow `QUEUE_SETUP.md`.
 
 ## Pitfalls already solved (don't redo)
 - **Captions failing on Windows:** the `.as_posix()` patch in step 2 fixes this.

@@ -213,13 +213,18 @@ function postOrder(a, b) {
     || String(pa.exported_at).localeCompare(String(pb.exported_at));
 }
 
+let shortsError = null;
 async function loadShorts() {
-  shorts = await sv.listShorts();
+  const r = await sv.listShorts();
+  shorts = r.items;
+  shortsError = r.error;
   renderShorts();
 }
+let shortsTimer;
+const loadShortsSoon = () => { clearTimeout(shortsTimer); shortsTimer = setTimeout(loadShorts, 500); };
 
 function renderShorts() {
-  const counts = { waiting: 0, held: 0, posted: 0, check: 0 };
+  const counts = { uploading: 0, waiting: 0, held: 0, posted: 0, check: 0 };
   shorts.forEach(s => { counts[s.status]++; });
   for (const k of Object.keys(counts)) $(`#n-${k}`).textContent = counts[k];
   $('#badge-shorts').textContent = counts.waiting || '';
@@ -227,7 +232,9 @@ function renderShorts() {
   list = filter === 'posted'
     ? list.sort((a, b) => String(b.result?.posted_at).localeCompare(String(a.result?.posted_at)))
     : list.sort(postOrder);
+  $('#shorts-error').textContent = shortsError || '';
   $('#shorts-empty').textContent = list.length ? '' : {
+    uploading: 'Nothing waiting to upload. New Shorts go to your online OneDrive as soon as they are made.',
     waiting: 'No Shorts waiting. Finished videos show up here once they reach OneDrive.',
     held: 'Nothing on hold. Shorts that failed the self-check land here for review.',
     posted: 'Nothing posted yet. n8n moves Shorts to posted/ after uploading them.',
@@ -239,7 +246,7 @@ function renderShorts() {
 function shortCard(s, nextUp) {
   const p = s.post;
   if (s.status === 'check') return checkCard(s);
-  const editable = s.where === 'ready';
+  const editable = s.where === 'ready' || s.where === 'outbox';
   const title = el('input', { value: p.title || '', maxlength: 100, disabled: !editable });
   const count = el('small', { class: 'count' }, `${(p.title || '').length}/100`);
   const desc = el('textarea', { rows: 5, disabled: !editable }, p.description || '');
@@ -283,6 +290,8 @@ function shortCard(s, nextUp) {
         p.creator ? el('span', { class: 'pill' }, p.creator) : null,
         el('span', { class: 'grow' }),
         prio),
+      s.where === 'outbox' ? el('p', { class: 'hint' }, s.uploadError
+        ? `Upload failed, retrying: ${s.uploadError}` : 'Waiting to upload to OneDrive. Edits here go up with it.') : null,
       p.flag ? el('p', { class: 'flag' }, `Self-check: ${p.flag}`) : null,
       yt ? el('p', { class: 'posted' }, 'Posted ', ago(s.result.posted_at), ' · ',
         el('button', { class: 'link', onclick: () => sv.openExternal(yt) }, yt.replace('https://', '')),
@@ -337,13 +346,14 @@ document.querySelectorAll('#filters .chip').forEach(c => c.addEventListener('cli
   renderShorts();
 }));
 $('#refresh-shorts').addEventListener('click', loadShorts);
-$('#open-output').addEventListener('click', () => sv.showFolder('output'));
+$('#open-output').addEventListener('click', () => sv.showFolder());
 
 // ------------------------------------------------------------------ settings
 
 function fillSettings(s) {
   settings = s;
-  $('#s-output').value = s.outputDir || '';
+  $('#s-clientid').value = s.msClientId || '';
+  $('#s-odfolder').value = s.onedriveFolder || 'StreamVault';
   $('#s-repo').value = s.repoDir || '';
   $('#s-voicestudio').value = s.voicestudioUrl || '';
   $('#s-minscore').value = s.minScore || 0;
@@ -360,9 +370,14 @@ document.querySelectorAll('[data-pick]').forEach(b => b.addEventListener('click'
   if (dir) $(`#${b.dataset.pick}`).value = dir;
 }));
 
+const oneDriveFields = () => ({
+  msClientId: $('#s-clientid').value.trim(),
+  onedriveFolder: $('#s-odfolder').value.trim().replace(/^\/+|\/+$/g, '') || 'StreamVault',
+});
+
 $('#save-settings').addEventListener('click', async () => {
   const s = await sv.setSettings({
-    outputDir: $('#s-output').value.trim(),
+    ...oneDriveFields(),
     repoDir: $('#s-repo').value.trim(),
     voicestudioUrl: $('#s-voicestudio').value.trim() || 'http://127.0.0.1:3900',
     minScore: Number($('#s-minscore').value) || 0,
@@ -377,7 +392,65 @@ $('#save-settings').addEventListener('click', async () => {
   runChecks();
 });
 
-const CHECK_LABEL = { voicestudio: 'VoiceStudio', claude: 'Claude Code', uv: 'uv', repo: 'StreamVault folder', output: 'Output folder' };
+const CHECK_LABEL = { voicestudio: 'VoiceStudio', claude: 'Claude Code', uv: 'uv', onedrive: 'OneDrive', repo: 'StreamVault folder' };
+
+// ------------------------------------------------------------------ OneDrive
+
+function showOneDrive(st) {
+  const pill = $('#od-pill');
+  pill.textContent = st.signedIn ? 'Connected' : st.configured ? 'Not connected' : 'Not set up';
+  pill.className = `pill ${st.signedIn ? 'ok' : 'bad'}`;
+  $('#od-account').textContent = st.signedIn
+    ? `Signed in as ${st.account ? `${st.account.name} (${st.account.email})` : 'your Microsoft account'}. Shorts upload to ${st.folder}/ready/ in your online OneDrive, where n8n picks them up.`
+    : "Shorts upload to the online OneDrive folder below, where n8n picks them up. The OneDrive desktop app isn't needed.";
+  $('#od-disconnect').style.display = st.signedIn ? '' : 'none';
+  $('#od-connect').textContent = st.signedIn ? 'Reconnect' : 'Connect OneDrive';
+  const modal = $('#od-modal');
+  if (st.login) {
+    $('#od-code').textContent = st.login.code;
+    $('#od-open').dataset.url = st.login.url;
+    modal.classList.add('show');
+  } else {
+    modal.classList.remove('show');
+  }
+  if (st.error) toast(st.error, 'bad');
+}
+
+$('#od-connect').addEventListener('click', async () => {
+  try {
+    fillSettings(await sv.setSettings(oneDriveFields()));
+    showOneDrive(await sv.connectOneDrive());
+  } catch (e) { toast(String(e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), 'bad'); }
+});
+$('#od-disconnect').addEventListener('click', async () => {
+  if (!confirm('Disconnect OneDrive? New Shorts will wait on this PC until you connect again.')) return;
+  await sv.disconnectOneDrive();
+});
+$('#od-open').addEventListener('click', e => sv.openExternal(e.currentTarget.dataset.url));
+$('#od-copy').addEventListener('click', () => {
+  navigator.clipboard.writeText($('#od-code').textContent).then(() => toast('Code copied'));
+});
+$('#od-cancel').addEventListener('click', () => sv.cancelOneDrive());
+sv.onOneDriveStatus(st => {
+  const wasLogin = $('#od-modal').classList.contains('show');
+  showOneDrive(st);
+  if (wasLogin && st.signedIn) { toast('OneDrive connected'); loadShorts(); }
+});
+
+function showUpload(u) {
+  const box = $('#upload-box');
+  const busy = u.active || u.pending;
+  box.classList.toggle('show', !!(busy || u.error));
+  box.classList.toggle('bad', !!u.error && !u.active);
+  $('#upload-state').textContent = u.active
+    ? `Uploading ${u.pending > 1 ? `1 of ${u.pending}` : 'a Short'}`
+    : u.pending ? `${u.pending} Short${u.pending > 1 ? 's' : ''} to upload` : 'Upload problem';
+  $('#upload-msg').textContent = u.active ? `${Math.round((u.progress || 0) * 100)}%` : u.error || '';
+  $('#upload-bar').style.width = `${Math.round((u.progress || 0) * 100)}%`;
+  $('#n-uploading').textContent = u.pending || 0;
+}
+sv.onUploadStatus(showUpload);
+sv.onShortsChanged(loadShortsSoon);
 async function runChecks() {
   $('#checks').replaceChildren(el('dt', {}, 'Checking…'));
   const r = await sv.runChecks();
@@ -440,9 +513,11 @@ sv.onEvent(ev => {
 
 (async function init() {
   fillSettings(await sv.getSettings());
-  const { state, engine, engineLog } = await sv.getState();
+  const { state, engine, engineLog, upload } = await sv.getState();
   Object.values(state.jobs || {}).forEach(j => jobs.set(j.id, j));
   setEngine(engine);
+  showUpload(upload);
+  showOneDrive(await sv.oneDriveStatus());
   engineLog.forEach(appendEngineLog);
   renderJobs();
   loadShorts();

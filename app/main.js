@@ -2,19 +2,22 @@
 //
 // Runs the Python engine (clipper/run_queue.py --watch) as a child process and talks to it through
 // files in <repo>/.worker/: the app writes requests/*.json, the engine writes state.json and prints
-// `EVENT {json}` lines. Shorts are read and edited straight from the OneDrive folder
-// (ready/<post id>/post.json), which is all the n8n poster ever sees.
+// `EVENT {json}` lines. Finished Shorts land in <repo>/outbox/; the uploader here sends each one to
+// online OneDrive (StreamVault/ready/<post id>/), which is all the n8n poster ever reads. The Shorts
+// tab reads and edits those online posts directly.
 
-const { app, BrowserWindow, Tray, Menu, ipcMain, dialog, shell, protocol, net, nativeImage } = require('electron');
+const { app, BrowserWindow, Tray, Menu, ipcMain, dialog, shell, protocol, net, nativeImage, safeStorage } = require('electron');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
 const { pathToFileURL } = require('url');
+const { OneDrive } = require('./onedrive');
 
 const VIDEO_EXTS = ['mp4', 'mov', 'mkv', 'avi', 'm4v', 'webm'];
 const PRIORITIES = ['high', 'normal', 'low'];
 const LOCKED_EXIT = 3; // run_queue.py: another engine holds the lock
+const UPLOAD_BACKOFF_MIN = [1, 2, 5, 15];
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'media', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
@@ -33,11 +36,10 @@ const engineLog = [];
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
 
 function defaultSettings() {
-  const od = process.env.STREAMVAULT_ONEDRIVE
-    || (process.env.OneDrive ? path.join(process.env.OneDrive, 'StreamVault') : '');
   return {
     repoDir: app.isPackaged ? 'C:\\StreamVault' : path.resolve(__dirname, '..'),
-    outputDir: od,
+    msClientId: '',
+    onedriveFolder: 'StreamVault',
     voicestudioUrl: 'http://127.0.0.1:3900',
     defaultPriority: 'normal',
     minScore: 0,
@@ -57,18 +59,24 @@ function loadSettings() {
   return settings;
 }
 
+const ENGINE_KEYS = ['repoDir', 'voicestudioUrl', 'minScore', 'maxShorts', 'deleteVideo'];
 function saveSettings(next) {
-  const before = JSON.stringify(settings);
+  const before = { ...settings };
   settings = { ...settings, ...next };
   writeJsonAtomic(settingsFile(), settings);
   app.setLoginItemSettings({ openAtLogin: !!settings.startAtLogin, args: ['--hidden'] });
-  if (JSON.stringify(settings) !== before) restartEngine();
+  if (before.msClientId !== settings.msClientId || before.onedriveFolder !== settings.onedriveFolder) {
+    drive = makeDrive();
+    sendOneDriveStatus();
+  }
+  if (ENGINE_KEYS.some(k => before[k] !== settings[k])) restartEngine();
   return settings;
 }
 
 // ------------------------------------------------------------------ files
 
 const workerDir = () => path.join(settings.repoDir, '.worker');
+const outboxDir = () => path.join(settings.repoDir, 'outbox');
 
 function writeJsonAtomic(file, data) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -98,11 +106,161 @@ function isInside(child, parent) {
   return rel && !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
-// ------------------------------------------------------------------ engine
-
 function emitToUi(channel, payload) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
 }
+
+// ------------------------------------------------------------------ OneDrive sign-in
+
+// The refresh token is as good as a password for the drive: encrypt it with the OS keychain
+// (DPAPI on Windows). Without one (some Linux setups) it is kept readable by this user only.
+const tokenFile = () => path.join(app.getPath('userData'), 'onedrive-token.bin');
+const tokenStore = {
+  load() {
+    try {
+      const raw = fs.readFileSync(tokenFile());
+      const text = raw.subarray(0, 4).toString() === 'TXT:' ? raw.subarray(4).toString()
+        : safeStorage.decryptString(raw);
+      return JSON.parse(text);
+    } catch {
+      return null;
+    }
+  },
+  save(tok) {
+    const text = JSON.stringify(tok);
+    const data = safeStorage.isEncryptionAvailable() ? safeStorage.encryptString(text) : Buffer.from(`TXT:${text}`);
+    fs.mkdirSync(path.dirname(tokenFile()), { recursive: true });
+    fs.writeFileSync(tokenFile(), data, { mode: 0o600 });
+  },
+  clear() {
+    fs.rmSync(tokenFile(), { force: true });
+  },
+};
+
+let drive = null;
+let account = null;   // { name, email } once known
+let login = null;     // device-code sign-in in progress
+
+function makeDrive() {
+  return new OneDrive({ clientId: settings.msClientId, folder: settings.onedriveFolder, store: tokenStore });
+}
+
+function oneDriveStatus() {
+  return {
+    configured: !!settings.msClientId,
+    signedIn: !!drive && drive.signedIn,
+    account,
+    folder: settings.onedriveFolder,
+    login: login && { code: login.user_code, url: login.verification_uri, message: login.message },
+  };
+}
+
+function sendOneDriveStatus(extra = {}) {
+  emitToUi('onedrive-status', { ...oneDriveStatus(), ...extra });
+}
+
+async function connectOneDrive() {
+  if (login) return oneDriveStatus();
+  drive = makeDrive();
+  const dc = await drive.startDeviceLogin();
+  login = dc;
+  const mine = dc;
+  drive.pollDeviceLogin(dc, () => login !== mine)
+    .then(me => {
+      account = me;
+      login = null;
+      sendOneDriveStatus();
+      uploadSoon(0);
+    })
+    .catch(e => {
+      if (login === mine) login = null;
+      sendOneDriveStatus({ error: e.message });
+    });
+  return oneDriveStatus();
+}
+
+function disconnectOneDrive() {
+  login = null;
+  if (drive) drive.signOut();
+  account = null;
+  sendOneDriveStatus();
+}
+
+// ------------------------------------------------------------------ uploader: outbox → online
+
+const upload = { active: null, progress: 0, pending: 0, error: null, lastDone: null };
+const failures = new Map(); // post id -> { count, until, error }
+let uploading = false;
+let uploadTimer = null;
+
+function outboxPosts() {
+  let names = [];
+  try {
+    names = fs.readdirSync(outboxDir(), { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name).sort();
+  } catch {
+    return [];
+  }
+  // post.json is written last by export_posts.py: without it the folder is still being filled.
+  return names.filter(n => fs.existsSync(path.join(outboxDir(), n, 'post.json')));
+}
+
+function sendUploadStatus() {
+  emitToUi('upload-status', { ...upload, signedIn: !!drive && drive.signedIn });
+}
+
+function uploadSoon(ms = 1000) {
+  clearTimeout(uploadTimer);
+  uploadTimer = setTimeout(uploadTick, ms);
+}
+
+async function uploadTick() {
+  clearTimeout(uploadTimer);
+  uploadTimer = setTimeout(uploadTick, 10000);
+  if (uploading) return;
+  const ids = outboxPosts();
+  upload.pending = ids.length;
+  if (!ids.length || !drive || !drive.signedIn) {
+    upload.error = ids.length && !(drive && drive.signedIn) ? 'Connect OneDrive in Settings to upload' : null;
+    return sendUploadStatus();
+  }
+  uploading = true;
+  try {
+    for (const id of ids) {
+      const f = failures.get(id);
+      if (f && f.until > Date.now()) continue;
+      upload.active = id;
+      upload.progress = 0;
+      upload.error = null;
+      sendUploadStatus();
+      const dir = path.join(outboxDir(), id);
+      try {
+        await drive.uploadPost(dir, p => { upload.progress = p; sendUploadStatus(); });
+        fs.rmSync(dir, { recursive: true, force: true });
+        failures.delete(id);
+        upload.lastDone = id;
+        emitToUi('shorts-changed', { id });
+      } catch (e) {
+        const n = (f ? f.count : 0) + 1;
+        const wait = UPLOAD_BACKOFF_MIN[Math.min(n, UPLOAD_BACKOFF_MIN.length) - 1];
+        failures.set(id, { count: n, until: Date.now() + wait * 60000, error: e.message });
+        upload.error = `${id}: ${e.message} (retrying in ${wait} min)`;
+        if (e.code === 'NOT_SIGNED_IN') {
+          account = null;
+          sendOneDriveStatus();
+          break;
+        }
+      }
+      upload.pending = outboxPosts().length;
+    }
+  } finally {
+    uploading = false;
+    upload.active = null;
+    upload.pending = outboxPosts().length;
+    sendUploadStatus();
+  }
+}
+
+// ------------------------------------------------------------------ engine
 
 function setEngineStatus(state, message = '') {
   engineStatus = { state, message };
@@ -113,16 +271,12 @@ function setEngineStatus(state, message = '') {
 function startEngine() {
   clearTimeout(restartTimer);
   if (engine) return;
-  if (!settings.outputDir) {
-    setEngineStatus('stopped', 'Set the output folder in Settings');
-    return;
-  }
   if (!fs.existsSync(path.join(settings.repoDir, 'clipper', 'run_queue.py'))) {
     setEngineStatus('stopped', `StreamVault folder not found: ${settings.repoDir}`);
     return;
   }
   const args = ['run', '--project', 'video-use', 'python', 'clipper/run_queue.py', '--watch', '--parent-pipe',
-    '--onedrive', settings.outputDir];
+    '--outbox', outboxDir()];
   if (settings.deleteVideo) args.push('--delete-video');
   if (Number(settings.minScore) > 0) args.push('--min-score', String(settings.minScore));
   if (Number(settings.maxShorts) > 0) args.push('--max-shorts', String(settings.maxShorts));
@@ -146,7 +300,7 @@ function startEngine() {
     }
     if (ev.type === 'ready' || ev.type === 'idle') setEngineStatus(ev.type === 'idle' ? 'idle' : 'running');
     if (ev.type === 'job' && ev.job.status === 'running') setEngineStatus('working', ev.job.title || ev.job.target);
-    if (ev.type === 'job' && ev.job.status === 'done') updateTrayMenu();
+    if (ev.type === 'job' && ev.job.posts && ev.job.posts.length) uploadSoon();
     emitToUi('engine-event', ev);
   });
   readline.createInterface({ input: proc.stderr }).on('line', logEngine);
@@ -222,71 +376,95 @@ function isRunning(id) {
   return job && job.status === 'running';
 }
 
-// ------------------------------------------------------------------ shorts in OneDrive
+// ------------------------------------------------------------------ Shorts: online + outbox
 
-function listShorts() {
-  const out = [];
-  for (const where of ['ready', 'posted']) {
-    const dir = path.join(settings.outputDir || '', where);
-    let names = [];
+const mediaUrl = file => `media://local/${encodeURIComponent(file)}`;
+
+function localVideo(post) {
+  const local = post.slug && post.rendered_file ? path.join(settings.repoDir, 'shorts', post.slug, post.rendered_file) : null;
+  return local && fs.existsSync(local) ? local : null;
+}
+
+function statusOf(item) {
+  if (item.where === 'outbox') return 'uploading';
+  if (item.where === 'posted') return 'posted';
+  // A result.json still in ready/ means n8n never finished with it: the upload failed for this
+  // Short (copyright), was never confirmed, or went up but couldn't be moved. n8n skips these.
+  if (item.result) return 'check';
+  return item.post.hold ? 'held' : 'waiting';
+}
+
+async function listShorts() {
+  const items = [];
+  for (const id of outboxPosts()) {
+    const dir = path.join(outboxDir(), id);
+    const post = readJson(path.join(dir, 'post.json'));
+    if (!post) continue;
+    const video = localVideo(post) || path.join(dir, post.video || 'video.mp4');
+    const f = failures.get(id);
+    items.push({ id, where: 'outbox', post, videoUrl: fs.existsSync(video) ? mediaUrl(video) : null,
+      uploadError: f ? f.error : null });
+  }
+  let error = null;
+  if (drive && drive.signedIn) {
     try {
-      names = fs.readdirSync(dir, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name);
-    } catch {
-      continue;
+      for (const it of await drive.listPosts()) {
+        const local = localVideo(it.post);
+        items.push({ ...it, videoUrl: local ? mediaUrl(local) : it.videoUrl });
+      }
+    } catch (e) {
+      error = e.message;
     }
-    for (const name of names) {
-      const folder = path.join(dir, name);
-      const post = readJson(path.join(folder, 'post.json'));
-      if (!post) continue;
-      const result = readJson(path.join(folder, 'result.json'));
-      const local = post.slug && post.rendered_file
-        ? path.join(settings.repoDir, 'shorts', post.slug, post.rendered_file) : null;
-      const video = local && fs.existsSync(local) ? local : path.join(folder, post.video || 'video.mp4');
-      // A result.json still in ready/ means n8n never finished with it: the upload failed for this
-      // Short (copyright), was never confirmed, or went up but couldn't be moved. n8n skips these.
-      const shot = path.join(settings.outputDir, 'failures', `${name}.jpg`);
-      out.push({
-        id: name,
-        where,
-        status: where === 'posted' ? 'posted' : result ? 'check' : post.hold ? 'held' : 'waiting',
-        post,
-        result,
-        videoUrl: fs.existsSync(video) ? `media://local/${encodeURIComponent(video)}` : null,
-        screenshotUrl: where === 'ready' && result && fs.existsSync(shot) ? `media://local/${encodeURIComponent(shot)}` : null,
-      });
-    }
+  } else {
+    error = settings.msClientId ? 'Not signed in to OneDrive: connect it in Settings' : 'Set up OneDrive in Settings';
   }
-  return out;
+  return { items: items.map(it => ({ ...it, status: statusOf(it) })), error };
 }
 
-// A Short under "Needs a look": try again (drop result.json) or record it as posted (move it).
-function resolveCheck(id, action) {
-  const ready = path.join(settings.outputDir, 'ready');
-  const folder = path.join(ready, id);
-  if (!isInside(folder, ready) || !fs.existsSync(folder)) throw new Error('This Short is not in ready/ any more');
-  if (action === 'retry') {
-    fs.rmSync(path.join(folder, 'result.json'), { force: true });
-  } else if (action === 'posted') {
-    const dest = path.join(settings.outputDir, 'posted', id);
-    fs.mkdirSync(path.dirname(dest), { recursive: true });
-    fs.renameSync(folder, dest);
-  }
-}
-
-function savePost(id, patch) {
-  const file = path.join(settings.outputDir, 'ready', id, 'post.json');
-  if (!isInside(file, path.join(settings.outputDir, 'ready'))) throw new Error('bad post id');
-  const post = readJson(file);
-  if (!post) throw new Error('This Short is no longer waiting (already posted?)');
-  const next = { ...post };
+function cleanPatch(patch) {
+  const next = {};
   if (typeof patch.title === 'string') next.title = patch.title.trim().slice(0, 100);
   if (typeof patch.description === 'string') next.description = patch.description.slice(0, 5000);
   if (Array.isArray(patch.tags)) next.tags = patch.tags.map(t => String(t).trim()).filter(Boolean);
   if (PRIORITIES.includes(patch.priority)) next.priority = patch.priority;
   if (typeof patch.hold === 'boolean') next.hold = patch.hold;
-  next.edited_at = new Date().toISOString();
-  writeJsonAtomic(file, next);
   return next;
+}
+
+// Not uploaded yet: edit the outbox copy (the upload then carries the edit). Otherwise edit online.
+async function savePost(id, patch) {
+  const clean = cleanPatch(patch);
+  const local = path.join(outboxDir(), id, 'post.json');
+  if (!isInside(local, outboxDir())) throw new Error('bad post id');
+  if (fs.existsSync(local) && upload.active !== id) {
+    const post = { ...readJson(local), ...clean, edited_at: new Date().toISOString() };
+    writeJsonAtomic(local, post);
+    return post;
+  }
+  if (!drive || !drive.signedIn) throw new Error('Connect OneDrive in Settings first');
+  try {
+    return await drive.updatePost(id, clean);
+  } catch (e) {
+    if (e.status === 404) throw new Error('This Short is no longer waiting (already posted?)');
+    throw e;
+  }
+}
+
+async function resolveCheck(id, action) {
+  if (!drive || !drive.signedIn) throw new Error('Connect OneDrive in Settings first');
+  if (action === 'retry') await drive.retryPost(id);
+  else if (action === 'posted') await drive.markPosted(id);
+}
+
+// A job's priority also applies to its Shorts that are still waiting (outbox or online ready/).
+async function setJobPostsPriority(jobId, priority) {
+  const job = readState().jobs[jobId];
+  for (const id of (job && job.posts) || []) {
+    try {
+      await savePost(id, { priority });
+    } catch { /* posted already, or offline: leave it */ }
+  }
+  emitToUi('shorts-changed', {});
 }
 
 // ------------------------------------------------------------------ checks
@@ -312,18 +490,29 @@ function checkCommand(cmd, args) {
   });
 }
 
+async function checkOneDrive() {
+  if (!settings.msClientId) return { ok: false, message: 'set the Microsoft app (client) ID' };
+  if (!drive || !drive.signedIn) return { ok: false, message: 'not connected' };
+  try {
+    account = account || await drive.me();
+    await drive.ensureFolders();
+    return { ok: true, message: `${account.email}: ${settings.onedriveFolder}/ is ready` };
+  } catch (e) {
+    return { ok: false, message: e.message };
+  }
+}
+
 async function runChecks() {
-  const outputOk = !!settings.outputDir && fs.existsSync(settings.outputDir);
-  const inOneDrive = !!process.env.OneDrive && isInside(settings.outputDir, process.env.OneDrive);
+  const [voicestudio, claude, uv, onedrive] = await Promise.all([
+    checkVoiceStudio(),
+    checkCommand(process.env.CLAUDE_BIN || 'claude', ['--version']),
+    checkCommand(process.env.STREAMVAULT_UV || 'uv', ['--version']),
+    checkOneDrive(),
+  ]);
   return {
-    voicestudio: await checkVoiceStudio(),
-    claude: await checkCommand(process.env.CLAUDE_BIN || 'claude', ['--version']),
-    uv: await checkCommand(process.env.STREAMVAULT_UV || 'uv', ['--version']),
+    voicestudio, claude, uv, onedrive,
     repo: fs.existsSync(path.join(settings.repoDir, 'clipper', 'run_queue.py'))
       ? { ok: true, message: settings.repoDir } : { ok: false, message: 'clipper/run_queue.py not found' },
-    output: !outputOk ? { ok: false, message: settings.outputDir ? 'folder does not exist yet' : 'not set' }
-      : inOneDrive || !process.env.OneDrive ? { ok: true, message: settings.outputDir }
-        : { ok: false, message: 'outside OneDrive: n8n in the cloud cannot read this folder' },
   };
 }
 
@@ -335,9 +524,18 @@ function handle(channel, fn) {
 
 handle('get-settings', () => settings);
 handle('set-settings', next => saveSettings(next));
-handle('get-state', () => ({ state: readState(), engine: engineStatus, engineLog }));
+handle('get-state', () => ({ state: readState(), engine: engineStatus, engineLog, upload, onedrive: oneDriveStatus() }));
 handle('run-checks', runChecks);
 handle('restart-engine', () => restartEngine());
+
+handle('onedrive-status', async () => {
+  if (drive && drive.signedIn && !account) account = await drive.me().catch(() => null);
+  return oneDriveStatus();
+});
+handle('onedrive-connect', connectOneDrive);
+handle('onedrive-cancel', () => { login = null; sendOneDriveStatus(); });
+handle('onedrive-disconnect', disconnectOneDrive);
+handle('upload-now', () => { failures.clear(); uploadSoon(0); });
 
 handle('add-links', ({ links, section, priority }) => {
   const urls = [...new Set(String(links).match(/https?:\/\/[^\s"'<>]+/g) || [])]
@@ -366,6 +564,7 @@ handle('job-action', async ({ op, id, priority }) => {
   sendRequest({ op, id, priority });
   // A running job only stops when its process tree does; the engine cancels it on restart.
   if (op === 'cancel' && isRunning(id)) await restartEngine();
+  if (op === 'priority' && PRIORITIES.includes(priority)) setJobPostsPriority(id, priority);
 });
 handle('job-log', id => {
   try {
@@ -381,9 +580,10 @@ handle('resolve-check', ({ id, action }) => resolveCheck(id, action));
 handle('open-external', url => {
   if (/^https?:\/\//.test(url)) shell.openExternal(url);
 });
-handle('show-folder', which => {
-  const p = which === 'output' ? settings.outputDir : path.join(settings.repoDir, 'shorts');
-  if (p) shell.openPath(p);
+handle('show-folder', async () => {
+  const url = drive && drive.signedIn ? await drive.folderUrl().catch(() => null) : null;
+  if (url) shell.openExternal(url);
+  else shell.openPath(path.join(settings.repoDir, 'shorts'));
 });
 
 // ------------------------------------------------------------------ windows
@@ -407,7 +607,7 @@ function createWindow(show = true) {
     return { action: 'deny' };
   });
   win.on('close', e => {
-    // Closing hides to the tray so Shorts keep being made; Quit is in the tray menu.
+    // Closing hides to the tray so Shorts keep being made and uploaded; Quit is in the tray menu.
     if (!quitting) {
       e.preventDefault();
       win.hide();
@@ -425,7 +625,10 @@ function updateTrayMenu() {
   if (!tray) return;
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Open StreamVault', click: showWindow },
-    { label: 'Open output folder', click: () => settings.outputDir && shell.openPath(settings.outputDir) },
+    { label: 'Open OneDrive folder', click: async () => {
+      const url = drive && drive.signedIn ? await drive.folderUrl().catch(() => null) : null;
+      if (url) shell.openExternal(url);
+    } },
     { type: 'separator' },
     { label: 'Quit', click: quit },
   ]));
@@ -433,11 +636,12 @@ function updateTrayMenu() {
 
 async function quit() {
   const running = Object.values(readState().jobs).some(j => j.status === 'running');
-  if (running) {
+  if (running || uploading) {
     const r = await dialog.showMessageBox(win, {
       type: 'question', buttons: ['Quit anyway', 'Keep running'], defaultId: 1, cancelId: 1,
-      message: 'A video is being processed.',
-      detail: 'Quitting stops it. It will start again from its last finished step next time.',
+      message: running ? 'A video is being processed.' : 'A Short is uploading to OneDrive.',
+      detail: running ? 'Quitting stops it. It will start again from its last finished step next time.'
+        : 'Quitting stops the upload. It starts over next time.',
     });
     if (r.response !== 0) return;
   }
@@ -452,12 +656,11 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', showWindow);
   app.whenReady().then(() => {
     loadSettings();
+    drive = makeDrive();
     protocol.handle('media', req => {
       const file = decodeURIComponent(new URL(req.url).pathname.slice(1));
-      // Only videos under the StreamVault and output folders.
-      if (!isInside(file, settings.repoDir) && !isInside(file, settings.outputDir)) {
-        return new Response('forbidden', { status: 403 });
-      }
+      // Only videos inside the StreamVault folder (shorts/, outbox/).
+      if (!isInside(file, settings.repoDir)) return new Response('forbidden', { status: 403 });
       return net.fetch(pathToFileURL(file).toString(), { headers: req.headers });
     });
     tray = new Tray(nativeImage.createFromPath(path.join(__dirname, 'assets', 'tray.png')).resize({ width: 16, height: 16 }));
@@ -465,6 +668,8 @@ if (!app.requestSingleInstanceLock()) {
     updateTrayMenu();
     createWindow(!process.argv.includes('--hidden'));
     startEngine();
+    uploadSoon(3000);
+    if (drive.signedIn) drive.me().then(me => { account = me; sendOneDriveStatus(); }).catch(() => {});
   });
   app.on('before-quit', () => { quitting = true; });
   app.on('will-quit', () => { if (engine) killTree(engine); });

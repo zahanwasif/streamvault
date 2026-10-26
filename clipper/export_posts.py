@@ -1,12 +1,14 @@
-"""Hand rendered Shorts to the n8n poster: copy each one into the synced OneDrive ready/ folder.
+"""Hand rendered Shorts to the n8n poster: copy each one into the outbox for the app to upload.
 
-    <OneDrive>/StreamVault/ready/<post id>/video.mp4
-    <OneDrive>/StreamVault/ready/<post id>/post.json     (written last, so n8n never sees half a post)
+    outbox/<post id>/video.mp4
+    outbox/<post id>/post.json     (written last, so the uploader never takes half a post)
+
+The StreamVault app uploads each outbox folder to online OneDrive as StreamVault/ready/<post id>/
+(video first, post.json last) and then deletes it here.
 
 The post id is `<export time>_<NN>_<slug>`. n8n posts the waiting post with the highest `priority`
 (high/normal/low, set per video in the app), then the highest `score`, then the oldest; it skips
-posts with `"hold": true`. The OneDrive desktop client does the upload; n8n moves each folder to
-posted/ once YouTube has it.
+posts with `"hold": true`, and moves each folder to posted/ once YouTube has it.
 
 Copy comes from shorts/<slug>/posts_copy.json when it has an entry for the Short (see
 plan_posts.py), else from the meta JSON's title/description/hashtags. Shorts flagged in the
@@ -15,7 +17,7 @@ exported or already posted by hand are skipped. Each exported meta JSON gets a `
 recording where it went.
 
 Usage:
-    python clipper/export_posts.py shorts/<slug> [--to <OneDrive>/StreamVault] [--priority high] [--min-score 7]
+    python clipper/export_posts.py shorts/<slug> [--to outbox] [--priority high] [--min-score 7]
 """
 
 from __future__ import annotations
@@ -46,17 +48,15 @@ def post_for(meta: dict, nn: str, copy: dict | None) -> dict:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Copy rendered Shorts into OneDrive ready/ for n8n")
+    ap = argparse.ArgumentParser(description="Copy rendered Shorts into the outbox for the app to upload")
     ap.add_argument("folder", type=Path, help="shorts/<slug>")
-    ap.add_argument("--to", type=Path, help="OneDrive StreamVault folder (default: STREAMVAULT_ONEDRIVE)")
+    ap.add_argument("--to", type=Path, default=_env.ROOT / "outbox", help="outbox folder (default: outbox/)")
     ap.add_argument("--priority", choices=["high", "normal", "low"], default="normal")
     ap.add_argument("--min-score", type=float, default=0)
     args = ap.parse_args()
 
-    root = args.to or _env.onedrive_dir()
-    ready = root / "ready"
-    ready.mkdir(parents=True, exist_ok=True)
-    (root / "posted").mkdir(exist_ok=True)
+    outbox = args.to
+    outbox.mkdir(parents=True, exist_ok=True)
 
     copy_path = args.folder / "posts_copy.json"
     copy = json.loads(copy_path.read_text(encoding="utf-8")) if copy_path.exists() else None
@@ -79,7 +79,7 @@ def main() -> None:
             continue
 
         post_id = f"{batch}_{nn}_{slug[:40]}"
-        dest = ready / post_id
+        dest = outbox / post_id
         dest.mkdir()
         shutil.copy2(video, dest / "video.mp4")
         post = {

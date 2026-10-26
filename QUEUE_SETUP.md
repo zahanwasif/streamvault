@@ -11,25 +11,24 @@ Add tab: links / video files, priority                      list OneDrive/Stream
    │                                                        skip Shorts on hold or still syncing
    ▼  engine: clipper/run_queue.py, one video at a time     pick: priority → score → oldest
 download → VoiceStudio transcript → pack → signals          upload with post.json's title,
-→ Claude Code picks + renders Shorts → export                 description, tags: through Studio
+→ Claude Code picks + renders Shorts → outbox/                description, tags: through Studio
    │                                                          on GitHub Actions (until the API
-   │                                                          audit clears), or the YouTube API
-   │                                                        write result.json, move to posted/
-   ▼
-OneDrive/StreamVault/ready/<post id>/video.mp4 + post.json  ◄── the only thing the two share
+   ▼  the app's uploader (Microsoft Graph, chunked)            audit clears), or the YouTube API
+online OneDrive: StreamVault/ready/<post id>/               write result.json, move to posted/
+   video.mp4 + post.json  ◄── the only thing the two share (in the cloud, not on the PC)
    ▲
-Shorts tab: edit title/description/tags, priority, Hold/Release
+Shorts tab: edit title/description/tags, priority, Hold/Release (edits go straight to OneDrive)
 ```
 
-- The PC only has to be on to make Shorts.
+- The PC only has to be on to make and upload Shorts. Nothing goes through the OneDrive desktop app: the StreamVault app uploads to your online OneDrive itself.
 - n8n posts whatever is in `ready/` whether the PC is on or not. At one post every 4 hours, that's 6 a day, so a 15-Short video lasts about 2½ days.
 - **n8n must not run on this PC**, or posting stops whenever the PC is off. Use n8n Cloud or an always-on server, such as your n8n.veleads.io.
 
-### The OneDrive folder (`OneDrive/StreamVault/`)
+### The online OneDrive folder (`StreamVault/` in the drive root)
 
 | Path | Written by | Holds |
 |---|---|---|
-| `ready/<post id>/` | the app | `video.mp4` + `post.json` (title, description, tags, `priority`, `score`, `hold`, `flag`) |
+| `ready/<post id>/` | the app's uploader | `video.mp4` + `post.json` (title, description, tags, `priority`, `score`, `hold`, `flag`). The video goes up first and `post.json` last, so n8n never sees half a post. |
 | `posted/<post id>/` | n8n | the same, plus `result.json` with the YouTube link |
 
 Shorts that the self-check flagged arrive **on hold**, with the reason in `flag`. Release them in the app's Shorts tab once you've looked at them. A `result.json` still inside `ready/` means an upload failed or was never confirmed; the app lists those under **Needs a look**. Screenshots of failed Studio uploads are in `failures/`.
@@ -38,7 +37,7 @@ Shorts that the self-check flagged arrive **on hold**, with the reason in `flag`
 Finish `PC_SETUP.md` first, so the pipeline, VoiceStudio and the video-use environment all work. Then:
 - **Node.js 22+** for the app. `node --version` should show it.
 - **Claude Code:** `claude --version` must work and be signed in. Run `claude` interactively once in `C:\StreamVault` and accept the folder-trust prompt. The app runs it headless (`claude -p`) for each video.
-- **OneDrive:** the desktop app must be signed in to the 1 TB account and syncing. The app writes to `%OneDrive%\StreamVault` by default.
+- **OneDrive:** nothing to install. The app signs in to your online OneDrive itself (2a).
 - **VoiceStudio** must be running with WhisperX on CUDA (`PC_SETUP.md` §6). The app's Settings → Checks shows whether it answers.
 
 ## 2. The desktop app
@@ -49,23 +48,42 @@ npm start
 ```
 For an installer, run `npm run dist`; `app/dist/` gets a Windows setup .exe. The installed app looks for the repo at `C:\StreamVault`; change it under Settings → StreamVault folder.
 
+### 2a. Connect OneDrive
+The app and n8n share one Azure app registration. Make it once, as in 3b, then:
+1. In that registration, go to **Authentication** → *Advanced settings* and set **Allow public client flows** to **Yes**, then Save. The app signs in with a device code, so it needs no secret or redirect.
+2. In the app's **Settings → OneDrive**:
+   - Paste the **Application (client) ID**.
+   - Keep the folder as `StreamVault` (it must match n8n).
+   - Click **Connect OneDrive**.
+3. The app shows a code. Click **Open sign-in page**, enter the code, sign in with the 1 TB OneDrive account, and accept the permissions (files, and staying signed in).
+4. Settings shows "Signed in as …". The app creates `StreamVault/ready`, `posted` and `failures` in your online OneDrive.
+
+The sign-in is stored encrypted with Windows' own protection (DPAPI) in the app's data folder. **Disconnect** removes it.
+
+**How uploads work:**
+- Finished Shorts wait in `C:\StreamVault\outbox\` until uploaded, then are deleted there. Your originals stay in `shorts/`.
+- Each video goes up in 10 MB chunks and is checked for size afterwards.
+- A failed upload retries after 1, 2, 5, then every 15 minutes. Restarting the app retries at once.
+- The sidebar shows the progress. The Shorts tab's **Uploading** filter lists what's still on the PC; you can edit those too, and the edits go up with them.
+- A Short that n8n has already posted is never uploaded again.
+
 **Settings tab**
-- **Output folder:** `%OneDrive%\StreamVault` by default. A folder outside OneDrive works on the PC, but n8n in the cloud can't read it, and the check says so.
+- **OneDrive:** client ID, folder name, Connect / Disconnect (2a).
 - **VoiceStudio URL:** default `http://127.0.0.1:3900`.
 - **Minimum score / max Shorts per video:** 0 means the skill's defaults (7 and 15).
 - **Default priority, delete downloaded videos after export** (transcripts are kept), **start at Windows sign-in.**
-- **Checks:** VoiceStudio, Claude Code, uv, and both folders.
+- **Checks:** VoiceStudio, Claude Code, uv, OneDrive (signed in, folders ready), and the StreamVault folder.
 
 **Using it**
 - **Add:** paste links (an optional "only this part" range like `1:00:00-2:30:00`), or drop video files, and pick High, Normal or Low.
 - **Queue:**
   - One video runs at a time, highest priority first.
-  - Each job shows its step: Download → Transcribe → Pack → Signals → Find & render → To OneDrive.
+  - Each job shows its step: Download → Transcribe → Pack → Signals → Find & render → To OneDrive (into the outbox, which the uploader then sends online).
   - Log shows the full output, and the live line shows what Claude is doing.
   - A failed job retries once after 10 minutes. Retry now, Cancel and Remove are on each row.
   - Changing a job's priority also re-prioritises its Shorts that are still waiting.
 - **Shorts:**
-  - Every Short in `ready/` and `posted/`, in the same order n8n will post them. The first one is marked **Next up**.
+  - Every Short in your online `ready/` and `posted/` (the 60 most recent), in the same order n8n will post them. The first one is marked **Next up**.
   - Edit the title, description and tags, set the priority, then **Save**. n8n posts whatever is in `post.json` at the time.
   - **Hold** keeps n8n away from a Short; **Release** gives it back.
   - Posted Shorts show their YouTube link.
@@ -81,6 +99,7 @@ For an installer, run `npm run dist`; `app/dist/` gets a Windows setup .exe. The
 In n8n, go to **Workflows → Import from File** and pick `n8n/post-shorts.json`. To change the workflow, edit `n8n/build_workflows.py` and run `python n8n/build_workflows.py`, or edit it in n8n and export it back.
 
 ### 3b. Microsoft OneDrive credential
+The same Azure app also signs in the desktop app (2a).
 1. In n8n, create a **Microsoft Drive OAuth2 API** credential and copy its OAuth Redirect URL.
 2. Register an app at https://entra.microsoft.com (App registrations → New registration):
    - Supported account types: **any organizational directory and personal Microsoft accounts**.
@@ -153,6 +172,7 @@ Google locks every video uploaded through the Data API from an **unaudited** pro
 - **Engine "Stopped" in the app:** Settings → Engine output shows why. Usually it's a wrong StreamVault folder, `uv` missing from PATH, or no output folder set.
 - **Job fails at Transcribe:** VoiceStudio isn't running, or the WhisperX model isn't loaded.
 - **Job fails at Find & render:** open its Log. `FAILED.txt` reasons and Claude errors show there.
-- **Nothing posts:** check that the Shorts tab has something under Waiting (not on hold) and that it's synced to OneDrive online. Then check the n8n executions list.
+- **Nothing posts:** check that the Shorts tab has something under Waiting (not on hold), not just under Uploading. Then check the n8n executions list.
+- **Shorts stuck under Uploading:** the sidebar box shows the error. "Connect OneDrive" means the sign-in expired: Settings → Connect OneDrive. Microsoft signs the app out after about 90 days without use.
 - **The same Short keeps failing in n8n:** Hold it in the app and read the error in the n8n execution.
 - **`result.json` but still in `ready/`:** the Short is under **Needs a look** in the app: failed, unconfirmed, or uploaded but not moved. n8n won't upload it again until you press **Try again**.

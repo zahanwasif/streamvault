@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: media:; media-src media:">
+        content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: media: https:; media-src media: https:">
   <title>StreamVault</title>
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -28,12 +28,16 @@
       <span class="dot"></span>
       <div><strong id="engine-state">Starting…</strong><small id="engine-msg"></small></div>
     </div>
+    <div class="upload" id="upload-box">
+      <svg viewBox="0 0 24 24"><path d="M7 18a5 5 0 0 1-.6-9.96A6 6 0 0 1 18 9a4.5 4.5 0 0 1-.5 9M12 12v8M9 15l3-3 3 3"/></svg>
+      <div><strong id="upload-state"></strong><small id="upload-msg"></small><span class="bar"><i id="upload-bar"></i></span></div>
+    </div>
   </aside>
 
   <main>
     <!-- Add -->
     <section class="tab active" id="tab-add">
-      <header><h1>Add videos</h1><p>Links or files go into the queue. The PC downloads each one, transcribes it with VoiceStudio, picks the best moments and puts the Shorts in OneDrive.</p></header>
+      <header><h1>Add videos</h1><p>Links or files go into the queue. The PC downloads each one, transcribes it with VoiceStudio, picks the best moments and uploads the Shorts to your online OneDrive.</p></header>
 
       <div class="card">
         <h2>Links</h2>
@@ -80,15 +84,17 @@
       </header>
       <div class="toolbar">
         <div class="chips" id="filters">
+          <button class="chip" data-filter="uploading">Uploading <b id="n-uploading">0</b></button>
           <button class="chip active" data-filter="waiting">Waiting <b id="n-waiting">0</b></button>
           <button class="chip" data-filter="held">On hold <b id="n-held">0</b></button>
           <button class="chip" data-filter="posted">Posted <b id="n-posted">0</b></button>
           <button class="chip warn" data-filter="check">Needs a look <b id="n-check">0</b></button>
         </div>
         <span class="grow"></span>
-        <button class="ghost" id="open-output">Open folder</button>
+        <button class="ghost" id="open-output">Open in OneDrive</button>
         <button class="ghost" id="refresh-shorts">Refresh</button>
       </div>
+      <p class="banner" id="shorts-error"></p>
       <div class="grid" id="shorts"></div>
       <p class="empty" id="shorts-empty"></p>
     </section>
@@ -97,10 +103,20 @@
     <section class="tab" id="tab-settings">
       <header><h1>Settings</h1></header>
       <div class="card">
+        <div class="row"><h2>OneDrive</h2><span class="grow"></span><span class="pill" id="od-pill">Not connected</span></div>
+        <p class="hint" id="od-account">Shorts upload to the online OneDrive folder below, where n8n picks them up. The OneDrive desktop app isn't needed.</p>
+        <div class="row wrap">
+          <label class="field grow-field">Microsoft app (client) ID <small>from your Azure app registration (public client flows on)</small><input id="s-clientid" placeholder="00000000-0000-0000-0000-000000000000"></label>
+          <label class="field">Folder in OneDrive <small>must match n8n</small><input id="s-odfolder" placeholder="StreamVault"></label>
+        </div>
+        <div class="row">
+          <span class="grow"></span>
+          <button class="ghost" id="od-disconnect">Disconnect</button>
+          <button class="primary" id="od-connect">Connect OneDrive</button>
+        </div>
+      </div>
+      <div class="card">
         <h2>Folders</h2>
-        <label class="field">Output folder <small>Shorts go to ready/ here. Use a OneDrive folder: n8n in the cloud reads it.</small>
-          <div class="pick"><input id="s-output"><button class="ghost" data-pick="s-output">Browse</button></div>
-        </label>
         <label class="field">StreamVault folder <small>the cloned repo, with clipper/ and video-use/</small>
           <div class="pick"><input id="s-repo"><button class="ghost" data-pick="s-repo">Browse</button></div>
         </label>
@@ -131,6 +147,21 @@
       </div>
     </section>
   </main>
+
+  <div class="modal" id="od-modal">
+    <div class="dialog">
+      <h2>Connect OneDrive</h2>
+      <p>Open the Microsoft sign-in page, enter this code, and sign in with the account that has your OneDrive.</p>
+      <div class="code" id="od-code">…</div>
+      <div class="row">
+        <button class="ghost" id="od-copy">Copy code</button>
+        <span class="grow"></span>
+        <button class="ghost" id="od-cancel">Cancel</button>
+        <button class="primary" id="od-open">Open sign-in page</button>
+      </div>
+      <p class="hint" id="od-wait">Waiting for you to finish signing in…</p>
+    </div>
+  </div>
 
   <div class="toast" id="toast"></div>
   <script src="app.js"></script>

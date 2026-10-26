@@ -15,6 +15,12 @@ contextBridge.exposeInMainWorld('api', {
   runChecks: () => call('run-checks'),
   restartEngine: () => call('restart-engine'),
 
+  oneDriveStatus: () => call('onedrive-status'),
+  connectOneDrive: () => call('onedrive-connect'),
+  cancelOneDrive: () => call('onedrive-cancel'),
+  disconnectOneDrive: () => call('onedrive-disconnect'),
+  uploadNow: () => call('upload-now'),
+
   addLinks: (links, section, priority) => call('add-links', { links, section, priority }),
   addFiles: (files, priority) => call('add-files', { files, priority }),
   pickFiles: () => call('pick-files'),
@@ -31,9 +37,12 @@ contextBridge.exposeInMainWorld('api', {
   savePost: (id, patch) => call('save-post', { id, patch }),
   resolveCheck: (id, action) => call('resolve-check', { id, action }),
   openExternal: url => call('open-external', url),
-  showFolder: which => call('show-folder', which),
+  showFolder: () => call('show-folder'),
 
   onEvent: on('engine-event'),
   onEngineStatus: on('engine-status'),
   onEngineLog: on('engine-log'),
+  onUploadStatus: on('upload-status'),
+  onOneDriveStatus: on('onedrive-status'),
+  onShortsChanged: on('shorts-changed'),
 });

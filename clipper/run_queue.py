@@ -1,10 +1,10 @@
-"""Engine behind the StreamVault desktop app: turns queued links and videos into Shorts in OneDrive.
+"""Engine behind the StreamVault desktop app: turns queued links and videos into Shorts for posting.
 
 The app (app/) starts this with --watch and talks to it through files:
     .worker/requests/*.json   the app's commands, applied in name order and then deleted:
         {"op": "add", "kind": "url"|"file", "target": "...", "section": "1:00:00-2:30:00", "priority": "high"}
         {"op": "retry"|"cancel"|"remove", "id": "j0007"}
-        {"op": "priority", "id": "j0007", "priority": "low"}   also re-prioritises its exported posts
+        {"op": "priority", "id": "j0007", "priority": "low"}   (the app re-prioritises posts already exported)
     .worker/state.json        every job, its stage and result (only this script writes it)
     .worker/logs/<id>.log     full output of each job's steps
 stdout carries `EVENT {json}` lines (ready / job / log / removed / idle) so the app updates live.
@@ -15,8 +15,9 @@ Each job runs these stages, one job at a time, highest priority first, then olde
     pack        video-use/helpers/pack_transcripts.py  → edit/takes_packed.md
     signals     clipper/signals.py                     → edit/signals.md
     clip        headless Claude Code, shorts-clipper skill from step 3 → shorts/<slug>/
-    export      clipper/export_posts.py                → <OneDrive>/StreamVault/ready/<post id>/
-The n8n poster takes it from there.
+    export      clipper/export_posts.py                → outbox/<post id>/ (video.mp4 + post.json)
+The app uploads each outbox folder to online OneDrive (StreamVault/ready/<post id>/) and deletes it;
+the n8n poster takes it from there. The engine itself never talks to OneDrive.
 
 A failed job is retried after 10 minutes, up to --max-attempts in total. To cancel a running job,
 the app writes a cancel request and then kills this process tree; on restart the job is cancelled.
@@ -25,7 +26,7 @@ outlives the app. Only one engine runs at a time: a second one exits with code 3
 .worker/engine.pid names the one that holds the lock.
 
 Usage:
-    uv run --project video-use python clipper/run_queue.py --watch [--onedrive DIR] [--delete-video]
+    uv run --project video-use python clipper/run_queue.py --watch [--outbox DIR] [--delete-video]
     uv run --project video-use python clipper/run_queue.py            # run what's queued, then exit
 """
 
@@ -122,19 +123,7 @@ def take_lock():
     return fh
 
 
-def set_post_priority(onedrive: Path, post_ids: list[str], priority: str) -> None:
-    """Re-prioritise a job's posts that are still waiting in ready/."""
-    for pid in post_ids:
-        pj = onedrive / "ready" / pid / "post.json"
-        if pj.exists():
-            post = json.loads(pj.read_text(encoding="utf-8"))
-            post["priority"] = priority
-            tmp = pj.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(post, indent=2, ensure_ascii=False), encoding="utf-8")
-            os.replace(tmp, pj)
-
-
-def apply_requests(state: dict, onedrive: Path) -> None:
+def apply_requests(state: dict) -> None:
     jobs = state["jobs"]
     for req_path in sorted(REQUESTS.glob("*.json")):
         try:
@@ -164,7 +153,6 @@ def apply_requests(state: dict, onedrive: Path) -> None:
             emit("removed", id=job["id"])
         elif job and op == "priority" and req.get("priority") in PRIORITIES:
             job["priority"] = req["priority"]
-            set_post_priority(onedrive, job.get("posts", []), job["priority"])
             emit("job", job=job)
         req_path.unlink(missing_ok=True)
     save_state(state)
@@ -266,7 +254,7 @@ def count_shorts(shorts: Path) -> int:
     return len(list(shorts.glob("[0-9][0-9]_*.mp4"))) if shorts.exists() else 0
 
 
-def process(state: dict, job: dict, args: argparse.Namespace, onedrive: Path) -> None:
+def process(state: dict, job: dict, args: argparse.Namespace) -> None:
     py = sys.executable
     log = LOGS / f"{job['id']}.log"
 
@@ -339,7 +327,7 @@ def process(state: dict, job: dict, args: argparse.Namespace, onedrive: Path) ->
 
     stage("export")
     out = run("export", [py, str(_env.ROOT / "clipper" / "export_posts.py"), str(shorts),
-                         "--to", str(onedrive), "--priority", job["priority"]], log, 1 * HOUR, relay)
+                         "--to", str(args.outbox), "--priority", job["priority"]], log, 1 * HOUR, relay)
     new = [Path(ln[6:].split("  (on hold")[0].strip()).name for ln in out if ln.startswith("READY ")]
     update(state, job, posts=job.get("posts", []) + new, shorts_rendered=count_shorts(shorts))
 
@@ -354,9 +342,10 @@ def process(state: dict, job: dict, args: argparse.Namespace, onedrive: Path) ->
 # ---------------------------------------------------------------- main
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="StreamVault engine: queued links/videos → Shorts in OneDrive")
+    ap = argparse.ArgumentParser(description="StreamVault engine: queued links/videos → Shorts in the outbox")
     ap.add_argument("--watch", action="store_true", help="keep running and wait for new jobs (the app uses this)")
-    ap.add_argument("--onedrive", type=Path, help="OneDrive StreamVault folder (default: STREAMVAULT_ONEDRIVE)")
+    ap.add_argument("--outbox", type=Path, default=_env.ROOT / "outbox",
+                    help="where finished Shorts go for the app to upload (default: outbox/)")
     ap.add_argument("--max-attempts", type=int, default=2)
     ap.add_argument("--claude-hours", type=float, default=8, help="time limit for one Claude run")
     ap.add_argument("--min-score", type=float, default=0, help="override the skill's minimum score")
@@ -370,8 +359,7 @@ def main() -> int:
     if args.parent_pipe:
         exit_with_parent()
 
-    onedrive = args.onedrive or _env.onedrive_dir()
-    for d in (onedrive / "ready", onedrive / "posted", LOGS, REQUESTS):
+    for d in (args.outbox, LOGS, REQUESTS):
         d.mkdir(parents=True, exist_ok=True)
 
     lock = take_lock()
@@ -385,12 +373,12 @@ def main() -> int:
         if j["status"] == "running":  # the PC or app stopped mid-job; we hold the lock, so it isn't running
             j["status"] = "retry" if j["attempts"] < args.max_attempts else "failed"
             j["retry_at"] = None
-    apply_requests(state, onedrive)
+    apply_requests(state)
     emit("ready", jobs=list(state["jobs"].values()))
 
     idle = False
     while True:
-        apply_requests(state, onedrive)
+        apply_requests(state)
         job = next_job(state)
         if job is None:
             if not args.watch:
@@ -404,7 +392,7 @@ def main() -> int:
 
         update(state, job, status="running", attempts=job["attempts"] + 1, started=now(), error=None)
         try:
-            process(state, job, args, onedrive)
+            process(state, job, args)
             update(state, job, status="done", stage=None, finished=now())
         except Exception as e:  # noqa: BLE001  - one bad job must not stop the queue
             failed = job["attempts"] >= args.max_attempts

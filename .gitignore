@@ -11,8 +11,9 @@ inbox/*
 *.webm
 *.wav
 
-# Engine state and logs
+# Engine state and logs, and Shorts waiting for the app to upload them
 .worker/
+outbox/
 
 # Desktop app
 app/node_modules/
