@@ -673,13 +673,14 @@ const CHECKS = {
     const id = settings.n8nIds.workflow;
     if (!id) return { ok: false, message: 'not created yet' };
     try {
-      const st = await n8nClient().status(id);
-      if (!st.exists) return { ok: false, message: 'the workflow was deleted in n8n: create it again' };
       const c = n8nClient();
-      return { ok: st.active, ...st, url: c.workflowUrl(id),
-        credentials: Object.fromEntries(Object.entries(settings.n8nIds).filter(([k]) => k !== 'workflow')
-          .map(([k, v]) => [k, { ...v, url: c.credentialUrl(v.id) }])),
-        message: st.active ? 'active: posting on schedule' : 'created, not active yet' };
+      const st = await c.status(id, settings.n8nIds);
+      if (!st.exists) return { ok: false, message: 'the workflow was deleted in n8n: create it again' };
+      const credentials = Object.fromEntries(Object.entries(settings.n8nIds).filter(([k]) => k !== 'workflow')
+        .map(([k, v]) => [k, { ...v, url: c.credentialUrl(v.id) }]));
+      const message = st.problem ? `last run failed at ${st.problem.node || 'a step'}: ${st.problem.hint}`
+        : st.active ? 'active: posting on schedule' : 'created, not active yet';
+      return { ok: st.active && !st.problem, ...st, url: c.workflowUrl(id), credentials, message };
     } catch (e) {
       return { ok: false, message: e.message };
     }
@@ -699,16 +700,20 @@ async function createWorkflow(log) {
   if (!gh.user) throw new Error(`GitHub: ${gh.message}`);
   const ids = { ...settings.n8nIds };
   log('creating credentials in n8n…');
+  const hadOneDrive = !!(ids.onedrive && ids.onedrive.id);
   ids.onedrive = await n.ensureCredential('onedrive',
     { clientId: settings.msClientId, clientSecret: secrets.get('msClientSecret') }, ids.onedrive);
-  log(`${ids.onedrive.created ? 'created' : 'kept'} ${ids.onedrive.name}`);
+  log(`${ids.onedrive.created ? (hadOneDrive ? 'recreated (the Azure app changed)' : 'created') : 'kept'} ${ids.onedrive.name}`);
+  const needConnect = ids.onedrive.created ? [ids.onedrive.name] : [];
   ids.github = await n.ensureCredential('github',
     { server: 'https://api.github.com', user: gh.user, accessToken: secrets.get('githubToken') }, ids.github);
   log(`${ids.github.created ? 'created' : 'kept'} ${ids.github.name}`);
   if (settings.googleClientId && secrets.get('googleClientSecret')) {
+    const hadYouTube = !!(ids.youtube && ids.youtube.id);
     ids.youtube = await n.ensureCredential('youtube',
       { clientId: settings.googleClientId, clientSecret: secrets.get('googleClientSecret') }, ids.youtube);
-    log(`${ids.youtube.created ? 'created' : 'kept'} ${ids.youtube.name}`);
+    log(`${ids.youtube.created ? (hadYouTube ? 'recreated (the Google client changed)' : 'created') : 'kept'} ${ids.youtube.name}`);
+    if (ids.youtube.created) needConnect.push(ids.youtube.name);
   } else {
     delete ids.youtube;
   }
@@ -720,7 +725,11 @@ async function createWorkflow(log) {
   ids.workflow = wf.id;
   saveSettings({ n8nIds: ids });
   log(`${wf.created ? 'created' : 'updated'} the workflow "${body.name}" (${wf.id})`);
-  log('Next: open each OAuth credential in n8n and click "Connect", then Activate.');
+  if (needConnect.length) {
+    // A new OAuth credential has no sign-in yet: n8n fails with "Unable to sign without access token" until it's connected.
+    log(`IMPORTANT: in n8n, open ${needConnect.join(' and ')} and click "Connect my account" before the workflow runs.`);
+  }
+  return { needConnect };
 }
 
 const ACTIONS = {

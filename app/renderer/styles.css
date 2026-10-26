@@ -316,3 +316,13 @@ table.execs th { color: var(--muted); font-weight: 600; font-size: 12.5px; }
 .dot2.bad { background: var(--bad); }
 .creds { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
 td.st-done { color: var(--ok); } td.st-failed { color: var(--bad); } td.st-queued { color: var(--muted); }
+
+.problem {
+  margin: 4px 0 12px; padding: 12px 14px; border-radius: 10px;
+  background: color-mix(in srgb, var(--bad) 10%, transparent); border: 1px solid color-mix(in srgb, var(--bad) 40%, var(--line));
+}
+.problem strong { color: var(--bad); }
+.problem p { margin: 6px 0 2px; }
+.problem small { overflow-wrap: anywhere; }
+.connect { margin-top: 14px; padding: 12px 14px; border-radius: 10px; background: var(--panel-2); }
+.connect ol.steps { margin-top: 6px; }

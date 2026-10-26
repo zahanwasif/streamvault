@@ -1,7 +1,7 @@
 {
   "name": "streamvault",
   "productName": "StreamVault",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Add links or videos; the PC turns them into Shorts and uploads them to OneDrive for the n8n poster.",
   "author": "Zahan Wasif",
   "private": true,
