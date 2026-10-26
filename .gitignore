@@ -11,6 +11,9 @@ inbox/*
 *.webm
 *.wav
 
+# Queue worker state and logs
+.worker/
+
 # Secrets
 .env
 .env.*

@@ -147,6 +147,8 @@ Keep it short.
 ## Posting to YouTube (only when the user asks)
 Not part of the automatic run: publishing is outward-facing, so it waits for the user to ask.
 
+Sources that came through the queue (`clipper/run_queue.py`, see `QUEUE_SETUP.md`) are exported to OneDrive `ready/` and posted by n8n on its schedule: don't also upload those by hand. Use `clipper/export_posts.py shorts/<slug>` to hand a manually clipped source to that same queue.
+
 1. Write `shorts/<slug>/posts_copy.json` (format in `clipper/plan_posts.py`'s docstring): per Short a title (≤ 100 chars, creator name near the front), the hook as a quote, a one-sentence setup, 5 topical tags and 2 extra hashtags. The description gets a credit line with the source URL, so only use "with permission" if the user said they have it.
 2. `$PY clipper/plan_posts.py shorts/<slug>` assigns hourly US Eastern slots (best-scored Shorts at 12, 13, 18–20 h), writes a `youtube` block into each meta JSON and `shorts/<slug>/schedule.md`. Shorts already published or scheduled are skipped.
 3. Upload in YouTube Studio through Claude in Chrome, in slot order. The Chrome upload tool can't send files over 10 MB, so the user picks each file in Studio's **Select files** dialog; Claude fills in title, description, "not made for kids", tags, language English, category Entertainment, AI use "No", then Visibility → Schedule at the slot time. If Checks reports a copyright claim, stop and tell the user.
@@ -160,5 +162,5 @@ The YouTube Data API isn't used: uploads from an unaudited API project are locke
 
 ## Notes
 - Only clip content the user owns or has permission to clip (their own channel, or a creator's clipping program). If a URL is clearly someone else's content and the user hasn't said they have permission, mention it once in the final report; don't refuse.
-- `shorts/<slug>/*.json` metadata is the input for the planned phase 2 (scheduled YouTube uploads). Keep its fields stable.
+- `shorts/<slug>/*.json` metadata feeds `export_posts.py` and `plan_posts.py`. Keep its fields stable. `"flagged": "<reason>"` holds a Short back from the queue.
 - Folder input: everything in `inbox/` (or the given folder) is processed. Sources that already have `shorts/<slug>/index.md` are skipped unless the user asks to redo them.

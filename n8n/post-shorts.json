@@ -1,0 +1,445 @@
+{
+  "name": "StreamVault: post Shorts",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## StreamVault: post the next Short\n\nRuns at each posting time (America/New_York, set in workflow settings). Takes the oldest folder in **OneDrive/StreamVault/ready/**, uploads its video.mp4 to YouTube with the copy from post.json, writes result.json next to it and moves the folder to **posted/**.\n\nNothing ready = nothing happens. A failed upload leaves the post in ready/ for the next slot.\n\n**Change the times:** open *Posting times* and edit the cron (minute hour …).\n**Privacy, category, language:** top of *Build upload*.",
+        "width": 520,
+        "height": 380
+      },
+      "id": "899b9507-c1d4-53d2-859c-3089703d78cd",
+      "name": "About",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -220,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 12,16,19 * * *"
+            }
+          ]
+        }
+      },
+      "id": "dd51d00d-11b2-5def-94d3-49e29100a530",
+      "name": "Posting times",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        200
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "d2b850c3-77de-56ee-824e-ad7bd00af99d",
+      "name": "Test now",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://graph.microsoft.com/v1.0/me/drive/root:/StreamVault/ready:/children?$top=200",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftOneDriveOAuth2Api",
+        "options": {}
+      },
+      "id": "44225b2a-eabb-53fc-95ca-b06e87837d96",
+      "name": "List ready",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Post ids start with the export time, then the clip's rank: sorting by name = oldest source first,\n// best Short first. Look at the first few so a post that is still syncing doesn't block the slot.\nconst kids = $input.first().json.value ?? [];\nreturn kids\n  .filter(k => k.folder && !/^[._]/.test(k.name))\n  .sort((a, b) => a.name.localeCompare(b.name))\n  .slice(0, 5)\n  .map(k => ({ json: { folderId: k.id, folderName: k.name } }));\n"
+      },
+      "id": "bd8145eb-66e3-5f37-8915-aa7296deeb2c",
+      "name": "Pick candidates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://graph.microsoft.com/v1.0/me/drive/items/{{ $json.folderId }}/children",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftOneDriveOAuth2Api",
+        "options": {}
+      },
+      "id": "e916a231-ef48-521f-946c-59bb5e66493d",
+      "name": "List files",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Keep folders that have post.json (the PC writes it last) and video.mp4. A result.json means the\n// Short was already uploaded but the move to posted/ failed: never upload it twice.\nconst out = [];\n$input.all().forEach((item, i) => {\n  const files = {};\n  for (const f of item.json.value ?? []) if (f.file) files[f.name] = f;\n  if (files['result.json'] || !files['post.json'] || !files['video.mp4']) return;\n  out.push({ json: {\n    ...$('Pick candidates').itemMatching(i).json,\n    postUrl: files['post.json']['@microsoft.graph.downloadUrl'],\n    videoUrl: files['video.mp4']['@microsoft.graph.downloadUrl'],\n    videoBytes: files['video.mp4'].size,\n  } });\n});\nreturn out;\n"
+      },
+      "id": "abbe3d01-0873-5f8a-b847-6abfc3273c8e",
+      "name": "Choose post",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.postUrl }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "7559b79a-f448-5700-bffb-b0260c48a33f",
+      "name": "Get post.json",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Settings\nconst PRIVACY = 'public';      // 'private' or 'unlisted' to post without going live\nconst CATEGORY_ID = '24';      // Entertainment\nconst LANGUAGE = 'en';\n\n// YouTube rejects < and > in titles and descriptions.\nconst clean = (s, n) => {\n  s = String(s ?? '').replace(/</g, '‹').replace(/>/g, '›').trim();\n  return s.length <= n ? s : s.slice(0, n - 1).trimEnd() + '…';\n};\nconst bytes = s => new TextEncoder().encode(s).length;\n\nconst posts = $input.all();\nfor (let i = 0; i < posts.length; i++) {\n  const pick = $('Choose post').itemMatching(i).json;\n  const post = posts[i].json;\n  // The PC records the video size; a smaller file in OneDrive is still uploading.\n  if (post.video_bytes && post.video_bytes !== pick.videoBytes) continue;\n\n  let description = clean(post.description, 5000);\n  while (bytes(description) > 5000) description = description.slice(0, -50);\n  const tags = [];\n  for (const t of post.tags ?? []) {\n    const v = String(t).replace(/^#/, '').trim();\n    if (v && !tags.includes(v) && [...tags, v].join(',').length <= 480) tags.push(v);\n  }\n  const title = clean(post.title, 100);\n  const lang = post.language ?? LANGUAGE;\n  return [{ json: {\n    ...pick,\n    title,\n    request: {\n      snippet: { title, description, tags, categoryId: String(post.category_id ?? CATEGORY_ID),\n                 defaultLanguage: lang, defaultAudioLanguage: lang },\n      status: { privacyStatus: PRIVACY, selfDeclaredMadeForKids: false, containsSyntheticMedia: false },\n    },\n  } }];\n}\nreturn [];\n"
+      },
+      "id": "31a811f9-f5e2-5788-9b0d-d7f876dc9de5",
+      "name": "Build upload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1340,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "youTubeOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Upload-Content-Type",
+              "value": "video/mp4"
+            },
+            {
+              "name": "X-Upload-Content-Length",
+              "value": "={{ $json.videoBytes }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.request) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "4ab4f95e-7a73-5e43-9974-a2276ea3ed39",
+      "name": "Start YouTube upload",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Build upload').first().json.videoUrl }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          },
+          "timeout": 600000
+        }
+      },
+      "id": "8cdbb438-95af-5bae-a1d1-bad9beff66e4",
+      "name": "Download video",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1780,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $('Start YouTube upload').first().json.headers.location }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "youTubeOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "video/mp4"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "data",
+        "options": {
+          "timeout": 1800000
+        }
+      },
+      "id": "1025e989-295f-5d8f-8651-1c6a1e893cd9",
+      "name": "Upload video",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2000,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://graph.microsoft.com/v1.0/me/drive/items/{{ $('Build upload').first().json.folderId }}:/result.json:/content",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftOneDriveOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ video_id: $json.id, url: 'https://youtube.com/shorts/' + $json.id, title: $('Build upload').first().json.title, privacy: $json.status?.privacyStatus, upload_status: $json.status?.uploadStatus, posted_at: $now.toISO() }, null, 2) }}",
+        "options": {}
+      },
+      "id": "7731cf65-2763-56ed-a116-9ed189471656",
+      "name": "Save result.json",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://graph.microsoft.com/v1.0/me/drive/root:/StreamVault/posted",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftOneDriveOAuth2Api",
+        "options": {}
+      },
+      "id": "f80b62fe-e946-56e0-86e9-2d2af0fc9aac",
+      "name": "Find posted folder",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://graph.microsoft.com/v1.0/me/drive/items/{{ $('Build upload').first().json.folderId }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftOneDriveOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ parentReference: { id: $json.id } }) }}",
+        "options": {}
+      },
+      "id": "6101188d-42d0-5312-a9a4-154760255098",
+      "name": "Move to posted",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2660,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "List ready": {
+      "main": [
+        [
+          {
+            "node": "Pick candidates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick candidates": {
+      "main": [
+        [
+          {
+            "node": "List files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List files": {
+      "main": [
+        [
+          {
+            "node": "Choose post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Choose post": {
+      "main": [
+        [
+          {
+            "node": "Get post.json",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get post.json": {
+      "main": [
+        [
+          {
+            "node": "Build upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build upload": {
+      "main": [
+        [
+          {
+            "node": "Start YouTube upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start YouTube upload": {
+      "main": [
+        [
+          {
+            "node": "Download video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download video": {
+      "main": [
+        [
+          {
+            "node": "Upload video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload video": {
+      "main": [
+        [
+          {
+            "node": "Save result.json",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save result.json": {
+      "main": [
+        [
+          {
+            "node": "Find posted folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find posted folder": {
+      "main": [
+        [
+          {
+            "node": "Move to posted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Posting times": {
+      "main": [
+        [
+          {
+            "node": "List ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Test now": {
+      "main": [
+        [
+          {
+            "node": "List ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/New_York",
+    "saveManualExecutions": true
+  },
+  "pinData": {}
+}

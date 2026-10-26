@@ -41,6 +41,15 @@ if shutil.which("ffmpeg") is None:
     sys.exit("ffmpeg not found on PATH")
 
 
+def onedrive_dir() -> Path:
+    """The synced OneDrive folder the queue reads links from and the n8n poster posts from."""
+    if os.environ.get("STREAMVAULT_ONEDRIVE"):
+        return Path(os.environ["STREAMVAULT_ONEDRIVE"])
+    if os.environ.get("OneDrive"):
+        return Path(os.environ["OneDrive"]) / "StreamVault"
+    sys.exit("OneDrive folder not found: set STREAMVAULT_ONEDRIVE (e.g. %OneDrive%\\StreamVault)")
+
+
 def slugify(text: str, max_len: int = 60) -> str:
     s = re.sub(r"[^a-zA-Z0-9]+", "-", text).strip("-").lower()
     return (s[:max_len].rstrip("-")) or "untitled"
