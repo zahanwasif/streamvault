@@ -181,11 +181,11 @@ class N8n {
       hint = `${label} has to be reconnected in n8n (the sign-in expired or was revoked).`;
       fix = kind;
     } else if (kind === 'onedrive' && /could not be found|itemNotFound|404/i.test(message)) {
-      hint = 'The StreamVault folder isn\u2019t in this OneDrive account. Connect the same account in the app (step 7, which creates the folders) as in n8n.';
+      hint = 'The StreamVault folder isn\u2019t in this OneDrive account. Connect the same account in the app (Setup → Microsoft account, which creates the folders) as in n8n.';
     } else if (kind === 'github' && /40[13]|Bad credentials|Resource not accessible/i.test(message)) {
-      hint = 'GitHub rejected the token: check it in Setup (step 8) and update the workflow.';
+      hint = 'GitHub rejected the token: check it in Setup → GitHub, then update the workflow.';
     } else if (/Studio upload failed \(session\)/i.test(message)) {
-      hint = 'YouTube signed the uploader out: save the YouTube session again (step 8).';
+      hint = 'YouTube signed the uploader out: save the session again in Setup → YouTube sign-in.';
     }
     return { node: nodeName, message: message.slice(0, 300), hint, fix, executionId, at: ex.startedAt };
   }
