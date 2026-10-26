@@ -614,7 +614,16 @@ const STEPS = [
       const ytSet = setupState.youtubeApi && setupState.youtubeApi.set;
       const hours = [1, 2, 3, 4, 6, 8, 12, 24];
       const creds = st.credentials || {};
+      const pb = st.problem;
       return [
+        pb ? el('div', { class: 'problem' },
+          el('strong', {}, `Last run failed${pb.node ? ` at \u201c${pb.node}\u201d` : ''}`),
+          el('p', {}, pb.hint),
+          pb.hint !== pb.message ? el('small', {}, `n8n said: ${pb.message}`) : null,
+          el('div', { class: 'row' }, el('span', { class: 'grow' }),
+            pb.fix && creds[pb.fix] ? el('button', { class: 'primary sm', onclick: () => sv.openExternal(creds[pb.fix].url) },
+              `Connect ${creds[pb.fix].name} in n8n`) : null,
+            st.url ? el('button', { class: 'ghost sm', onclick: () => sv.openExternal(`${st.url}/executions/${pb.executionId}`) }, 'See the run in n8n') : null)) : null,
         el('div', { class: 'row wrap' },
           el('label', { class: 'field' }, 'Post every', el('select', { id: 'st-wf-hours' },
             hours.map(h => el('option', { value: h, selected: Number(settings.postEveryHours) === h }, h === 24 ? 'day' : `${h} hour${h > 1 ? 's' : ''}`)))),
@@ -624,12 +633,22 @@ const STEPS = [
             el('option', { value: 'api', selected: settings.uploader === 'api', disabled: !ytSet }, 'YouTube API (after the audit)')))),
         el('div', { class: 'row' }, el('span', { class: 'grow' }),
           button(st.exists ? 'Update workflow in n8n' : 'Create workflow in n8n', 'workflow.create',
-            { primary: !st.exists, after: () => checkStep('workflow') }),
+            { primary: !st.exists, after: r => {
+              const need = r.ok && r.result && r.result.needConnect;
+              if (need && need.length) toast(`Now connect ${need.join(' and ')} in n8n (Connect my account)`);
+              return checkStep('workflow');
+            } }),
           st.exists && !st.active ? button('Activate', 'workflow.activate', { primary: true, after: () => checkStep('workflow') }) : null,
           st.url ? el('button', { class: 'ghost sm', onclick: () => sv.openExternal(st.url) }, 'Open in n8n') : null),
-        Object.keys(creds).length ? el('div', { class: 'creds' }, el('span', { class: 'hint' }, 'In n8n, open each sign-in credential and click Connect, once:'),
-          ['onedrive', 'youtube'].filter(k => creds[k]).map(k => el('button', { class: 'ghost sm', onclick: () => sv.openExternal(creds[k].url) },
-            `Connect ${k === 'onedrive' ? 'OneDrive' : 'YouTube'} in n8n`))) : null,
+        Object.keys(creds).length ? el('div', { class: 'connect' },
+          el('strong', {}, 'Connect the sign-in credentials in n8n, once each'),
+          el('ol', { class: 'steps' },
+            ['onedrive', 'youtube'].filter(k => creds[k]).map(k => el('li', {},
+              el('button', { class: 'link', onclick: () => sv.openExternal(creds[k].url) }, `Open ${creds[k].name} in n8n`),
+              ' → click ', el('b', {}, 'Connect my account'), ' → sign in with ',
+              k === 'onedrive' ? 'the Microsoft account that has your OneDrive' : 'the YouTube channel\u2019s Google account',
+              ' → it should say ', el('i', {}, 'Account connected'), '.')),
+            el('li', {}, 'Until then every run fails with \u201cUnable to sign without access token\u201d.'))) : null,
         st.executions && st.executions.length ? el('table', { class: 'execs' },
           el('tr', {}, el('th', {}, 'Recent runs'), el('th', {}, '')),
           st.executions.map(x => el('tr', {}, el('td', {}, new Date(x.startedAt).toLocaleString()),

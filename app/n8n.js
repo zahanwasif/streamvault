@@ -136,7 +136,7 @@ class N8n {
     }
   }
 
-  async status(id) {
+  async status(id, creds = {}) {
     const wf = await this.workflowExists(id);
     if (!wf) return { exists: false };
     let executions = [];
@@ -145,7 +145,49 @@ class N8n {
       executions = (r.data || []).map(x => ({ id: x.id, status: x.status || (x.finished ? 'success' : 'error'),
         startedAt: x.startedAt, stoppedAt: x.stoppedAt }));
     } catch { /* executions API off */ }
-    return { exists: true, active: !!(wf.active || wf.activeVersionId), name: wf.name, updatedAt: wf.updatedAt, executions };
+    // Only the newest run counts: an old failure that has since been fixed shouldn't show.
+    const last = executions[0];
+    const problem = last && last.status === 'error' ? await this.diagnose(last.id, wf, creds) : null;
+    return { exists: true, active: !!(wf.active || wf.activeVersionId), name: wf.name, updatedAt: wf.updatedAt,
+      executions, problem };
+  }
+
+  // Why did this run fail? { node, message, hint, fix } where fix names the credential to (re)connect.
+  async diagnose(executionId, wf, creds = {}) {
+    let ex;
+    try {
+      ex = await this.api('GET', `/executions/${executionId}?includeData=true`);
+    } catch {
+      return null;
+    }
+    let data = ex.data;
+    if (typeof data === 'string') {
+      try { data = JSON.parse(data); } catch { data = null; }
+    }
+    const err = data && data.resultData && data.resultData.error;
+    const nodeName = (err && err.node && err.node.name) || (data && data.resultData && data.resultData.lastNodeExecuted) || '';
+    const message = String((err && (err.message || err.description)) || 'the run failed');
+    const node = (wf.nodes || []).find(n => n.name === nodeName);
+    const credType = node && node.parameters && node.parameters.nodeCredentialType;
+    const kind = Object.entries(CRED_TYPES).find(([, t]) => t === credType)?.[0];
+    const cred = kind && creds[kind];
+    const label = cred ? cred.name : credType || 'the credential';
+    let hint = message;
+    let fix = null;
+    if (/Unable to sign without access token/i.test(message)) {
+      hint = `${label} isn't connected in n8n yet. Open it and click "Connect my account".`;
+      fix = kind;
+    } else if (/needs to be reconnected|invalid_grant|refresh token/i.test(message)) {
+      hint = `${label} has to be reconnected in n8n (the sign-in expired or was revoked).`;
+      fix = kind;
+    } else if (kind === 'onedrive' && /could not be found|itemNotFound|404/i.test(message)) {
+      hint = 'The StreamVault folder isn\u2019t in this OneDrive account. Connect the same account in the app (Setup → Microsoft account, which creates the folders) as in n8n.';
+    } else if (kind === 'github' && /40[13]|Bad credentials|Resource not accessible/i.test(message)) {
+      hint = 'GitHub rejected the token: check it in Setup → GitHub, then update the workflow.';
+    } else if (/Studio upload failed \(session\)/i.test(message)) {
+      hint = 'YouTube signed the uploader out: save the session again in Setup → YouTube sign-in.';
+    }
+    return { node: nodeName, message: message.slice(0, 300), hint, fix, executionId, at: ex.startedAt };
   }
 }
 
