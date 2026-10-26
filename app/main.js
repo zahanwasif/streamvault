@@ -113,6 +113,24 @@ function sendRequest(req) {
   writeJsonAtomic(path.join(workerDir(), 'requests', name), req);
 }
 
+// Adds the engine hasn't picked up yet (it isn't running, or is starting): the Queue lists them as waiting.
+function pendingAdds() {
+  const dir = path.join(workerDir(), 'requests');
+  let names = [];
+  try {
+    names = fs.readdirSync(dir).filter(n => n.endsWith('.json')).sort();
+  } catch {
+    return [];
+  }
+  return names
+    .map(name => ({ ...readJson(path.join(dir, name), {}), id: name }))
+    .filter(r => r.op === 'add' && r.target);
+}
+
+function sendPending() {
+  emitToUi('pending', pendingAdds());
+}
+
 function isInside(child, parent) {
   if (!parent) return false;
   const rel = path.relative(path.resolve(parent), path.resolve(child));
@@ -319,6 +337,7 @@ function startEngine() {
     if (ev.type === 'job' && ev.job.status === 'running') setEngineStatus('working', ev.job.title || ev.job.target);
     if (ev.type === 'job' && ev.job.posts && ev.job.posts.length) uploadSoon();
     emitToUi('engine-event', ev);
+    if (ev.type === 'ready' || ev.type === 'applied') sendPending();
   });
   readline.createInterface({ input: proc.stderr }).on('line', logEngine);
 
@@ -541,7 +560,9 @@ function handle(channel, fn) {
 
 handle('get-settings', () => settings);
 handle('set-settings', next => saveSettings(next));
-handle('get-state', () => ({ state: readState(), engine: engineStatus, engineLog, upload, onedrive: oneDriveStatus() }));
+handle('get-state', () => ({
+  state: readState(), pending: pendingAdds(), engine: engineStatus, engineLog, upload, onedrive: oneDriveStatus(),
+}));
 handle('run-checks', runChecks);
 handle('restart-engine', () => restartEngine());
 
@@ -559,12 +580,19 @@ handle('add-links', ({ links, section, priority }) => {
     .map(u => u.replace(/[).,;\]]+$/, ''));
   const sec = /^\d[\d:]*-\d[\d:]*$/.test(String(section || '').trim()) ? section.trim() : null;
   for (const url of urls) sendRequest({ op: 'add', kind: 'url', target: url, section: sec, priority });
+  sendPending();
   return urls.length;
 });
 handle('add-files', ({ files, priority }) => {
   const ok = files.filter(f => VIDEO_EXTS.includes(path.extname(f).slice(1).toLowerCase()) && fs.existsSync(f));
   for (const f of ok) sendRequest({ op: 'add', kind: 'file', target: f, priority });
+  sendPending();
   return ok.length;
+});
+handle('remove-pending', name => {
+  // Only a request file name, never a path.
+  if (/^[\w-]+\.json$/.test(String(name))) fs.rmSync(path.join(workerDir(), 'requests', name), { force: true });
+  sendPending();
 });
 handle('pick-files', async () => {
   const r = await dialog.showOpenDialog(win, {
@@ -629,7 +657,7 @@ const CHECKS = {
   async workspace() {
     const st = workspace.status(settings.repoDir);
     const gb = freeSpace(settings.repoDir);
-    return { ...st, ok: st.ok && !pythonStale, dir: settings.repoDir, freeGb: gb,
+    return { ...st, dir: settings.repoDir, freeGb: gb,
       message: `${st.message}${gb != null ? ` · ${gb} GB free` : ''}` };
   },
   tools: () => setup.checkTools({ voicestudioUrl: settings.voicestudioUrl }),
@@ -657,13 +685,19 @@ const CHECKS = {
     if (!account && drive) account = await drive.me().catch(() => null);
     return { ok: true, message: `OneDrive: ${account ? account.email : 'connected'}`, ...oneDriveStatus(), secret };
   },
-  async github() {
-    const r = await github().check();
-    let session = null;
-    if (r.user) session = await github().secretInfo('YT_SESSION').catch(() => null);
-    const sessionMsg = session ? `YouTube session saved ${new Date(session.updated_at).toLocaleString()}` : 'YouTube session not saved yet';
-    return { ...r, ok: r.ok && !!session, session: session && session.updated_at,
-      message: r.ok ? `${r.message} · ${sessionMsg}` : r.message };
+  github: () => github().check(),
+  async youtube() {
+    const gh = github();
+    if (!gh.token || !settings.githubRepo) return { ok: false, message: 'save the GitHub token first (the session is stored on GitHub)' };
+    try {
+      const session = await gh.secretInfo('YT_SESSION');
+      return session
+        ? { ok: true, session: session.updated_at, message: `YouTube session saved ${new Date(session.updated_at).toLocaleString()}` }
+        : { ok: false, message: 'YouTube session not saved yet' };
+    } catch (e) {
+      return { ok: false, message: e.status === 403
+        ? 'the GitHub token can\'t read repository secrets: give it Secrets: Read and write' : e.message };
+    }
   },
   async youtubeApi() {
     const set = !!(settings.googleClientId && secrets.get('googleClientSecret'));
@@ -758,8 +792,8 @@ const ACTIONS = {
   'save': values => saveSetup(values),
   'microsoft.connect': () => connectOneDrive(),
   'microsoft.disconnect': () => disconnectOneDrive(),
-  'github.openChrome': () => setup.openChromeForYouTube(path.join(app.getPath('userData'), 'yt-session-profile')),
-  async 'github.capture'(_v, log) {
+  'youtube.openChrome': () => setup.openChromeForYouTube(path.join(app.getPath('userData'), 'yt-session-profile')),
+  async 'youtube.capture'(_v, log) {
     const { session, cookies } = await setup.captureYouTubeSession();
     log(`read ${cookies} YouTube/Google cookies`);
     const gh = github();

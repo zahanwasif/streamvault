@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld('api', {
   pickFiles: () => call('pick-files'),
   pickFolder: () => call('pick-folder'),
   pathForFile: file => webUtils.getPathForFile(file),
+  removePending: name => call('remove-pending', name),
 
   retry: id => call('job-action', { op: 'retry', id }),
   cancel: id => call('job-action', { op: 'cancel', id }),
@@ -46,6 +47,7 @@ contextBridge.exposeInMainWorld('api', {
   onEvent: on('engine-event'),
   onEngineStatus: on('engine-status'),
   onEngineLog: on('engine-log'),
+  onPending: on('pending'),
   onUploadStatus: on('upload-status'),
   onOneDriveStatus: on('onedrive-status'),
   onShortsChanged: on('shorts-changed'),

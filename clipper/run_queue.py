@@ -7,7 +7,9 @@ The app (app/) starts this with --watch and talks to it through files:
         {"op": "priority", "id": "j0007", "priority": "low"}   (the app re-prioritises posts already exported)
     .worker/state.json        every job, its stage and result (only this script writes it)
     .worker/logs/<id>.log     full output of each job's steps
-stdout carries `EVENT {json}` lines (ready / job / log / removed / idle) so the app updates live.
+stdout carries `EVENT {json}` lines (ready / job / log / removed / applied / idle) so the app updates live.
+With --watch, requests are applied every couple of seconds even while a job runs, so a link added
+mid-job shows up in the queue straight away instead of when the current job finishes.
 
 Each job runs these stages, one job at a time, highest priority first, then oldest:
     download    clipper/fetch.py                       → sources/<slug>/
@@ -54,6 +56,10 @@ LOCKED_EXIT = 3
 PRIORITIES = ("high", "normal", "low")
 RETRY_AFTER = timedelta(minutes=10)
 HOUR = 3600
+REQUEST_POLL = 2   # seconds between request checks in --watch mode
+
+# Guards state and stdout: the request watcher thread and the job loop both change jobs and emit events.
+LOCK = threading.RLock()
 
 DEFAULT_TOOLS = ",".join([
     "Read", "Write", "Edit", "Glob", "Grep", "Agent", "Task",
@@ -83,7 +89,10 @@ def now() -> str:
 
 
 def emit(kind: str, **data) -> None:
-    print("EVENT " + json.dumps({"type": kind, **data}, ensure_ascii=False), flush=True)
+    line = "EVENT " + json.dumps({"type": kind, **data}, ensure_ascii=False) + "\n"
+    with LOCK:
+        sys.stdout.write(line)
+        sys.stdout.flush()
 
 
 # ---------------------------------------------------------------- state, lock, requests
@@ -95,15 +104,17 @@ def load_state() -> dict:
 
 
 def save_state(state: dict) -> None:
-    tmp = STATE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, STATE)
+    with LOCK:
+        tmp = STATE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, STATE)
 
 
 def update(state: dict, job: dict, **changes) -> None:
-    job.update(changes)
-    save_state(state)
-    emit("job", job=job)
+    with LOCK:
+        job.update(changes)
+        save_state(state)
+        emit("job", job=job)
 
 
 def take_lock():
@@ -124,8 +135,17 @@ def take_lock():
 
 
 def apply_requests(state: dict) -> None:
+    pending = sorted(REQUESTS.glob("*.json"))
+    if not pending:
+        return
+    with LOCK:
+        _apply(state, pending)
+
+
+def _apply(state: dict, pending: list[Path]) -> None:
     jobs = state["jobs"]
-    for req_path in sorted(REQUESTS.glob("*.json")):
+    applied = 0
+    for req_path in pending:
         try:
             req = json.loads(req_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -155,15 +175,36 @@ def apply_requests(state: dict) -> None:
             job["priority"] = req["priority"]
             emit("job", job=job)
         req_path.unlink(missing_ok=True)
-    save_state(state)
+        applied += 1
+    if applied:
+        save_state(state)
+        emit("applied")   # the request files are gone: the app drops them from its "waiting" list
 
 
-def next_job(state: dict) -> dict | None:
-    t = now()
-    ready = [j for j in state["jobs"].values()
-             if j["status"] == "queued" or (j["status"] == "retry" and (j.get("retry_at") or "") <= t)]
-    ready.sort(key=lambda j: (PRIORITIES.index(j["priority"]), j["seq"]))
-    return ready[0] if ready else None
+def watch_requests(state: dict) -> None:
+    """--watch: apply the app's requests while a job runs, not only between jobs."""
+    def loop() -> None:
+        while True:
+            time.sleep(REQUEST_POLL)
+            try:
+                apply_requests(state)
+            except Exception as e:  # noqa: BLE001  - keep watching; the job loop applies them too
+                print(f"applying requests failed: {e}", file=sys.stderr, flush=True)
+    threading.Thread(target=loop, daemon=True).start()
+
+
+def start_next_job(state: dict) -> dict | None:
+    """Pick the next job and mark it running in one step, so a cancel can't land in between."""
+    with LOCK:
+        t = now()
+        ready = [j for j in state["jobs"].values()
+                 if j["status"] == "queued" or (j["status"] == "retry" and (j.get("retry_at") or "") <= t)]
+        if not ready:
+            return None
+        ready.sort(key=lambda j: (PRIORITIES.index(j["priority"]), j["seq"]))
+        job = ready[0]
+        update(state, job, status="running", attempts=job["attempts"] + 1, started=now(), error=None)
+        return job
 
 
 # ---------------------------------------------------------------- running steps
@@ -316,8 +357,8 @@ def process(state: dict, job: dict, args: argparse.Namespace) -> None:
 
         run("clip", claude_cmd(PROMPT.format(slug=slug, settings=settings), args.tools), log,
             args.claude_hours * HOUR, on_claude)
-        job["claude"] = {"cost_usd": result.get("total_cost_usd"), "turns": result.get("num_turns"),
-                         "report": (result.get("result") or "")[-1500:]}
+        update(state, job, claude={"cost_usd": result.get("total_cost_usd"), "turns": result.get("num_turns"),
+                                   "report": (result.get("result") or "")[-1500:]})
         if result.get("is_error"):
             raise StepFailed(f"Claude run ended with an error: {(result.get('result') or '')[:300]}")
         if (shorts / "FAILED.txt").exists():
@@ -374,12 +415,15 @@ def main() -> int:
             j["status"] = "retry" if j["attempts"] < args.max_attempts else "failed"
             j["retry_at"] = None
     apply_requests(state)
+    save_state(state)
     emit("ready", jobs=list(state["jobs"].values()))
+    if args.watch:
+        watch_requests(state)
 
     idle = False
     while True:
         apply_requests(state)
-        job = next_job(state)
+        job = start_next_job(state)
         if job is None:
             if not args.watch:
                 return 0
@@ -390,7 +434,6 @@ def main() -> int:
             continue
         idle = False
 
-        update(state, job, status="running", attempts=job["attempts"] + 1, started=now(), error=None)
         try:
             process(state, job, args)
             update(state, job, status="done", stage=None, finished=now())

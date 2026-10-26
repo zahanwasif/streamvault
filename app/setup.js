@@ -165,31 +165,71 @@ async function installTool(id, ctx, onLine) {
 async function pythonEnv(workspace) {
   const r = await run('uv', ['run', '--project', 'video-use', 'python', '-c', 'import numpy, requests; print("ok")'],
     { cwd: workspace, timeout: 60000 });
-  return r.code === 0 && /ok/.test(r.out) ? { ok: true, message: 'video-use environment ready' }
-    : { ok: false, message: 'not set up yet' };
+  if (!(r.code === 0 && /ok/.test(r.out))) return { ok: false, message: 'not set up yet' };
+  return skillLinked(workspace) ? { ok: true, message: 'video-use environment ready' }
+    : { ok: false, message: 'packages installed, but the video-use skill isn\'t linked for Claude Code yet' };
 }
 
 async function syncPython(workspace, onLine) {
   onLine('$ uv sync (video-use)');
   const r = await run('uv', ['sync'], { cwd: path.join(workspace, 'video-use'), onLine });
   if (r.code !== 0) throw new Error(`uv sync failed (exit ${r.code})`);
-  linkSkill(workspace);
-  onLine('linked the video-use skill for Claude Code');
+  // The packages are in place either way; a link failure shows on the step, not as a failed sync.
+  try {
+    onLine(linkSkill(workspace));
+  } catch (e) {
+    onLine(`could not link the video-use skill: ${e.message}`);
+  }
   return pythonEnv(workspace);
 }
 
 // Claude Code finds the video-use skill in ~/.claude/skills/video-use; a junction keeps its
 // helpers/ next to SKILL.md (PC_SETUP.md §4).
-function linkSkill(workspace) {
-  const link = path.join(os.homedir(), '.claude', 'skills', 'video-use');
-  const target = path.join(workspace, 'video-use');
-  fs.mkdirSync(path.dirname(link), { recursive: true });
+const skillLink = () => path.join(os.homedir(), '.claude', 'skills', 'video-use');
+
+function samePath(a, b) {
   try {
-    const st = fs.lstatSync(link);
-    if (st.isSymbolicLink() && path.resolve(fs.readlinkSync(link)) === path.resolve(target)) return;
-    fs.rmSync(link, { recursive: !st.isSymbolicLink(), force: true });
+    const x = fs.realpathSync.native(a);
+    const y = fs.realpathSync.native(b);
+    return WIN ? x.toLowerCase() === y.toLowerCase() : x === y;
+  } catch {
+    return false;
+  }
+}
+
+function skillLinked(workspace) {
+  return samePath(skillLink(), path.join(workspace, 'video-use'));
+}
+
+// Returns a line for the log. A junction made by hand (PC_SETUP.md) to the same folder is kept;
+// one pointing elsewhere is replaced; a real folder there is renamed aside, never deleted.
+function linkSkill(workspace) {
+  const link = skillLink();
+  const target = path.join(workspace, 'video-use');
+  if (skillLinked(workspace)) return `the video-use skill is already linked (${link})`;
+  fs.mkdirSync(path.dirname(link), { recursive: true });
+  let st = null;
+  try {
+    st = fs.lstatSync(link);
   } catch { /* not there yet */ }
+  let note = '';
+  if (st && st.isSymbolicLink()) {
+    // A junction or symlink: removing it leaves its target alone. unlink fails on a Windows
+    // directory junction, rmdir removes it.
+    try {
+      fs.unlinkSync(link);
+    } catch {
+      fs.rmdirSync(link);
+    }
+    note = ' (replaced an old link)';
+  } else if (st) {
+    // Outside skills/, so Claude Code doesn't load it as a second video-use skill.
+    const aside = path.join(os.homedir(), '.claude', `video-use-skill.old-${Date.now()}`);
+    fs.renameSync(link, aside);
+    note = ` (moved the folder that was there to ${aside})`;
+  }
   fs.symlinkSync(target, link, WIN ? 'junction' : 'dir');
+  return `linked the video-use skill for Claude Code${note}`;
 }
 
 // ------------------------------------------------------------------ Claude sign-in
@@ -322,7 +362,7 @@ async function captureYouTubeSession({ closeChrome = true } = {}) {
 
 module.exports = {
   TOOLS, tools, refreshPath, run, checkTools, installTool, chromePath,
-  pythonEnv, syncPython, linkSkill, claudeStatus, claudeLogin,
+  pythonEnv, syncPython, linkSkill, skillLinked, claudeStatus, claudeLogin,
   voicestudioAnswers, testVoiceStudio, setVoiceStudioTimeout, toneWav,
   openChromeForYouTube, captureYouTubeSession,
 };
