@@ -1,0 +1,37 @@
+Edit like a top IRL-clip channel. These rules come from measuring Skyftbl's 10 latest Shorts (see docs/skyftbl-analysis.md); follow them unless a per-video instruction says otherwise.
+
+STORY
+- Every Short is a complete mini-story: the premise in the first line, a turn, the payoff, then a one-line emotional verdict. 30-45 s is normal when the story needs it; never pad, never stop before the verdict.
+- Rank wholesome and loyalty moments highest (a gift, family, a fan who recognises him, someone looking out for him): they outperform pure chaos 2-5x. Funny chaos is the second choice. Skip moments with no clear verdict.
+- People talk for about three quarters of the runtime. Choose stretches with near-continuous talk and jump-cut every pause longer than 0.4 s.
+
+OPENING (first 2 seconds)
+- Start on the premise line or the strongest reaction, mid-sentence if needed: the first word lands within 0.3 s. No establishing shots, no slow walk-ins.
+- No hook banner when the first spoken line already sets up the story (most clips). Only when it doesn't: hook_text of 3-6 words that names the premise, middle of the screen, fade animation, gone by 2.5 s.
+- Cold open only when the payoff is a visual shock that beats any opening line (an eye-pop, a scream, a crash); otherwise tell it in order, coldOpen off.
+- The first 3 seconds are the loudest, busiest part: a punch-in zoom on the first reaction and a whoosh into the first cut.
+
+CAPTIONS
+- Always on, mid-frame (captions.position about 45), Arial Black, white, uppercase, 3 words at a time, words appearing as they are spoken, outline 3, shadow 4.
+- One highlight colour per clip, picked by its feeling: neon green #4CFF4C for funny or positive, yellow #FFE14D for money and hype, pink #FF7AD9 for cute and wholesome, red #FF4D4D for danger or arguments, cyan #4DE8FF for calm or emotional. Highlight 1-2 punch words per caption (names, numbers, prices, the emotional word), never filler.
+
+PACING AND FRAMING
+- A visual change every 2-3 s: real cuts about every 2.7 s, plus punch-in zooms on reactions between cuts. 3-5 zooms per Short at about 1.15, 0.6 s each; 1.25 on the single biggest reaction. Put more of them in the first third.
+- One person moving: follow their face. A streamer reacting to a clip or a call: facecam on top, the content underneath. Two people who both matter and stand far apart: blurred background.
+
+MUSIC
+- Always a steady bed, not pumping: about 10 dB under the voice the whole time (music.volume 0.45, music.duck false). When nobody talks for more than 2 s the music carries the moment.
+- Mood by story: wholesome, family, loyalty or emotional -> romantic or chill (warm); funny chaos -> funny; hype, danger, sports -> hype.
+- Let the music ring out over the final verdict and fade out; no loop ending (hook.loop false).
+
+SOUND EFFECTS
+- Sparse: about 5 per Short, half of them in the first 3 seconds; the automatic whooshes on cuts count.
+- Whoosh into the opening cuts and into the payoff. Bass boom only on a genuine shock. Ding or pop on a reveal (a price, a gift, a name). Laugh or gasp only when the real reaction on screen is weaker than the moment.
+- Never put an effect on top of a punchline being spoken; place it just before or just after.
+
+ENDING
+- Close on the emotional verdict: hold the final reaction 1-1.5 s with the music, and make the last caption the line that sums it up. No "follow for more".
+
+TITLES AND COPY
+- Title: the creator's name + what happened, framed as a feeling or a question, 30-45 characters, ending in two emojis that match the feeling (😭❤️ wholesome, 💀😭 funny, 🥹❤️ emotional, 😭🔥 hype). At most one word in caps.
+- Description: 2-3 sentences retelling the moment with a few emojis, then one question to the viewer to start comments ("Does Speed really hate Slipz?"), then 8-10 hashtags: #IShowSpeed #Speed #Shorts plus the topic and people.
