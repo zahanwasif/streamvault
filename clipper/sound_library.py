@@ -52,8 +52,8 @@ SFX = [
     ("sting_1", "reaction", "Dramatic suspense string sting, short orchestral stab", 1.5),
     ("airhorn_1", "reaction", "Air horn blast, short party horn", 1.2),
     ("crickets_1", "reaction", "Crickets chirping in an awkward silence", 2.0),
-    ("pop_1", "ui", "Short bubbly pop sound", 0.4),
-    ("pop_2", "ui", "Soft mouth pop click", 0.4),
+    ("pop_1", "ui", "Short bubbly pop sound", 0.5),
+    ("pop_2", "ui", "Soft mouth pop click", 0.5),
     ("click_1", "ui", "Crisp camera shutter click", 0.5),
 ]
 
@@ -80,6 +80,7 @@ MUSIC = [
     ("chill_downtempo_1", "chill", "Calm downtempo electronic, airy pads, soft kick, 95 BPM."),
     ("chill_trap_1", "chill", "Chill trap beat, soft 808, airy pads, 70 BPM, dreamy."),
 ]
+SFX_MIN_S, SFX_MAX_S = 0.5, 30
 MUSIC_SECONDS = 60
 MUSIC_MODEL = "music_v1"
 SFX_MODEL = "eleven_text_to_sound_v2"
@@ -122,6 +123,7 @@ def make_sfx(key: str, folder: Path, ids: set[str] | None, force: bool) -> int:
         if out.exists() and not force:
             continue
         out.parent.mkdir(parents=True, exist_ok=True)
+        secs = min(SFX_MAX_S, max(SFX_MIN_S, secs))   # the API's limits
         out.write_bytes(call(key, "/v1/sound-generation", {"text": prompt, "duration_seconds": secs,
                                                            "prompt_influence": 0.5, "model_id": SFX_MODEL}, 120))
         y = sounds.load_mono(out)

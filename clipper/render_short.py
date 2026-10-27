@@ -504,7 +504,8 @@ def plan_sfx(spec: dict, st: dict, ranges: list[dict], cold_len: float, out_path
             missing.add(sound)
             continue
         lufs = e.get("lufs")
-        level = (-20.0 - float(lufs)) if isinstance(lufs, (int, float)) else 0.0   # effects sit ~6 dB under -14 LUFS speech
+        # Effects sit ~6 dB under -14 LUFS speech; a very quiet file is lifted at most 12 dB.
+        level = min(12.0, -20.0 - float(lufs)) if isinstance(lufs, (int, float)) else 0.0
         plan.append({"file": folder / e["file"], "at": at - float(e.get("hit_ms") or 0) / 1000,
                      "gain_db": level + gain + 20 * math.log10(s["volume"]), "sound": e["file"]})
     notes = [f"no sound effect for {', '.join(sorted(missing))}"] if missing else []

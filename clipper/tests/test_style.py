@@ -298,6 +298,23 @@ def test_sfx_plan_and_graph():
     assert "[vmix][s0][s1]amix=inputs=3" in g
 
 
+def test_sound_catalogue_and_levels():
+    import sound_library
+    assert all(sound_library.SFX_MIN_S <= secs <= sound_library.SFX_MAX_S for *_, secs in sound_library.SFX)
+    assert len({sid for sid, *_ in sound_library.SFX}) == len(sound_library.SFX)
+    assert len({mid for mid, *_ in sound_library.MUSIC}) == len(sound_library.MUSIC)
+    with tempfile.TemporaryDirectory() as d:
+        folder = Path(d) / "sfx"
+        (folder / "impact").mkdir(parents=True)
+        (folder / "impact" / "thud_1.mp3").write_bytes(b"x")
+        (folder / "library.json").write_text(json.dumps({"sounds": [
+            {"file": "impact/thud_1.mp3", "category": "impact", "tags": ["thud"], "hit_ms": 0, "lufs": -39.7}]}))
+        st = styles.resolve(styles.clean(styles.DEFAULTS), {"sfx": {"folder": str(folder), "volume": 1.0, "autoCuts": False}})
+        plan, _ = rs.plan_sfx({"sfx": [{"at": 1.0, "sound": "impact/thud"}]}, st, [{"start": 0.0, "end": 5.0}], 0.0,
+                              Path("01_x.mp4"))
+        assert round(plan[0]["gain_db"], 2) == 12.0                       # a near-silent file isn't lifted 20 dB
+
+
 def test_voice_hook():
     st = styles.clean(styles.DEFAULTS)
     assert rs.voice_line({"voice_hook": True, "hook_text": "He had no idea"}, st) == "He had no idea"
