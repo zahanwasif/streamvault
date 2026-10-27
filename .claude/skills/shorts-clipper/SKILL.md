@@ -13,12 +13,19 @@ Built on video-use (`video-use/SKILL.md`). Its production rules still apply: cut
 
 | Setting | Value |
 |---|---|
-| Minimum score to render | **7** / 10 |
-| Max Shorts per source | **15** |
-| Clip length | **15–60 s** (go up to 90 s only for a story whose payoff needs it) |
+| Minimum score to render | **9** / 10 |
+| Max Shorts per source | **3** |
+| Clip length | **20–45 s** (cold open included) |
 | Parallel renders | 3 |
 
-The user can override any of these in their message ("only 9s and up", "max 5").
+The user's `style.json` in the repo root (written by the app's **Style** tab) holds their own values for these (`clip`), the hook, music and caption look, and free-text `instructions`; follow it when it exists. The app's runs spell these out in the prompt as "User settings for this run". The user can also override anything in their message ("only 8s and up", "max 5", "yellow captions").
+
+## Quality bar
+Quality over quantity: every Short goes out under the user's name.
+- **It works cold.** A stranger who has never heard of the creator gets it with no context.
+- **The payoff is inside the window.** The laugh, the reveal or the reaction happens in the clip, not after it.
+- **No dead air.** No pause, setup or "so anyway" longer than 2 s. Cut it with jump cuts or drop the clip.
+- **Zero Shorts from a weak video is a correct result.** Never lower the bar to fill the maximum. If nothing scores at the minimum, write `index.md` saying so and render nothing.
 
 ## Commands
 
@@ -52,11 +59,11 @@ Inputs: `edit/takes_packed.md` (phrases with `[start-end]` seconds) and `edit/si
 
 - Source **≤ 90 min**: read both yourself.
 - Source **> 90 min**: spawn one sub-agent per 60-min window, **all in parallel in a single message**, with windows overlapping by 2 min. Each brief is self-contained:
-  > "Read `<abs path>/takes_packed.md`, lines whose `[start-...]` falls in `<a>`–`<b>` s, plus the `<a>`–`<b>` entries in `<abs path>/signals.md`. Using the rubric below, return ONLY a JSON array of candidates `{start, end, category, hook, score, reason}`. Do not render, do not ask questions." Paste the rubric into the brief.
+  > "Read `<abs path>/takes_packed.md`, lines whose `[start-...]` falls in `<a>`–`<b>` s, plus the `<a>`–`<b>` entries in `<abs path>/signals.md`. Using the rubric below, return ONLY a JSON array of candidates `{start, end, category, hook, score, reason}`. Do not render, do not ask questions." Paste the rubric, the quality bar and the score guidance into the brief, and add: "Be strict: a 9 works cold for a stranger, has its payoff inside the clip and no dead air over 2 s. Returning no candidates is fine."
 
 Signals point at moments; the transcript says what happens there. A loudness spike or chat burst with no transcript explanation may be a gameplay moment: check it with one frame (`ffmpeg -ss <t> -i <video> -frames:v 1 -vf scale=960:-2 edit/verify/t<t>.png`, then Read it) before scoring it.
 
-**Rubric** (score 1–10 for how well the clip works on its own, with no context, to a stranger scrolling Shorts):
+**Rubric** (score 1–10 for how well the clip works on its own, with no context, to a stranger scrolling Shorts; apply the quality bar above):
 
 | Category | What it looks like |
 |---|---|
@@ -65,9 +72,11 @@ Signals point at moments; the transcript says what happens there. A loudness spi
 | `engaging` | Hot take, surprising story with a payoff, heated argument, emotional confession, useful insight. |
 | `hype` | Clutch play, big win or loss, rage, screaming reaction. Loudness spikes plus chat bursts. |
 
-- 9–10: instantly gripping in the first 2 s, clear payoff, rewatchable.
-- 7–8: strong, but needs a beat of setup or has a softer payoff.
+- 9–10: instantly gripping in the first 2 s, clear payoff inside the clip, no dead air, rewatchable. Rare: most long videos have 0–3.
+- 7–8: strong, but needs a beat of setup or has a softer payoff. Below the default bar.
 - ≤6: inside joke, needs long context, or no clear payoff. Skip.
+
+Score honestly and low: a 9 is a clip you would send a friend. Anything with setup over 2 s, a payoff that lands after the window, or that needs context is 8 at most.
 
 Hard skips: dead air, ads/sponsor reads, "be right back" screens, anything that needs the previous 5 minutes to make sense, slurs, or sexual content.
 
@@ -76,13 +85,20 @@ Write all candidates to `sources/<slug>/edit/candidates.json`.
 ### 4. Select
 Merge the candidate lists. Where two overlap, keep the higher score. Drop anything below the minimum, sort by score, and cap at the maximum.
 
-### 5. Tighten each clip
+### 5. Tighten each clip, then write the hook
 Run `words.py` around each clip (±10 s) to get exact word times.
 - **Start on the hook.** The first line should grab within 2 s. Cut setup down to under 3 s, or open on the reaction and let the setup follow.
 - **End after the payoff plus the reaction.** The laugh is the beat. Don't end mid-laugh or on a dangling "so...".
 - Start = first word's start − 0.05 s; end = last word's end + 0.15 s. Never cut inside a word.
 - **Jump cuts:** if a pause of 1 s or more (marked `<-- gap`) sits inside the clip with nothing visual happening, split it into multiple ranges around the gap. Keep 0.1–0.2 s of air at each side.
-- Stay within the length setting.
+- Stay within the length setting (`clip.minSeconds`–`clip.maxSeconds`, cold open included); the renderer flags anything outside it as BAD.
+
+**Hook** (the first ~3 s decide whether anyone watches):
+- `hook_text`: ≤ 8 words of curiosity or tension that make a stranger stay for the payoff. Not the punchline, not the title. Good: "SHE SWORE SHE WATCHES HIM EVERY NIGHT", "HE DIDN'T KNOW THE MIC WAS ON". Skip it when the hook banner is off.
+- `cold_open`: a flash-forward of the payoff (`{start, end}` in source seconds, about `hook.coldOpenSeconds` long, usually the reaction or the punchline), played first under the hook text before the clip starts from the top. With `coldOpen: auto` set it only when there is a clear payoff or reaction that hooks on its own; leave it out otherwise. With `always`, always set one; with `off`, never.
+- `music_mood`: `funny`, `hype`, `romantic` or `chill`, matching the clip.
+- `emphasis`: 1–3 words per caption-worth of speech to colour, when the caption highlight is set to keywords: the punch words (names, numbers, the reaction word), never filler.
+- `style`: only when the user's instructions ask for something per clip (e.g. "yellow captions on funny clips" → `{"captions": {"highlight": "#FFE14D"}}`). Same keys as `style.json`; colours are `#RRGGBB`.
 
 ### 6. Pick the layout (once per source, re-check when the scene changes)
 Grab 2–3 frames from different times of the source (`ffmpeg -ss <t> -i <video> -frames:v 1 -vf scale=960:-2 edit/verify/layout_<t>.png`) and Read them.
@@ -102,6 +118,11 @@ For clip NN (01 = highest score), write `sources/<slug>/edit/clips/NN.json`:
   "source": "<info.video>",
   "edit_dir": "<abs>/sources/<slug>/edit",
   "ranges": [{"start": 812.35, "end": 829.10}, {"start": 830.40, "end": 838.25}],
+  "cold_open": {"start": 835.90, "end": 838.25},
+  "hook_text": "HE DID NOT SEE THAT COMING",
+  "emphasis": ["never", "million"],
+  "music_mood": "funny",
+  "style": {},
   "layout": {"type": "split", "cam": [0.72, 0.05, 0.26, 0.30], "game": [0.15, 0, 0.7, 1], "cam_height": 768},
   "captions": true,
   "output": "<abs>/shorts/<slug>/NN_<category>_<title-slug>.mp4",
@@ -119,16 +140,16 @@ For clip NN (01 = highest score), write `sources/<slug>/edit/clips/NN.json`:
 }
 ```
 
-Add `"grade": "neutral_punch"` only if frames look flat or dark.
+Add `"grade": "neutral_punch"` only if frames look flat or dark. Leave out `cold_open`, `hook_text`, `emphasis` or `style` when they don't apply.
 
 ### 8. Render
-`render_short.py sources/<slug>/edit/clips/*.json --jobs 3`. Each line reports `[OK ]`, `[BAD]` (wrong size or duration) or `[ERR]`. Fix BAD/ERR specs and re-render just those.
+`render_short.py sources/<slug>/edit/clips/*.json --jobs 3`. Each line reports `[OK ]`, `[BAD]` (wrong size, duration or length) or `[ERR]`. Fix BAD/ERR specs and re-render just those. The renderer applies the user's `style.json` itself (captions, hook banner, music); a "no music" note means `music/` has no tracks: mention it in the report, it's not an error.
 
 ### 9. Self-check (no user stops)
 Run `$PY clipper/sheet.py shorts/<slug>`. It writes `shorts/<slug>/_sheet.png`, one numbered frame per Short at 1.0 s (`--at 3` for another moment). Read the sheet and check:
 - the face is fully in frame
 - the split cam box isn't showing gameplay or borders
-- captions are readable and not covering the face
+- captions and the hook banner are readable and not covering the face
 
 Fix and re-render at most 2 times. Anything still wrong gets flagged in `index.md`.
 
@@ -161,6 +182,7 @@ Sources added in the StreamVault desktop app (`app/`, engine `clipper/run_queue.
 The YouTube Data API isn't used: uploads from an unaudited API project are locked to private.
 
 ## Notes
+- Background music only ever comes from the user's `music/` folder: tracks they own or royalty-free ones (e.g. the YouTube Audio Library). Never download or add songs yourself: a copyrighted song gets a Content ID claim.
 - Only clip content the user owns or has permission to clip (their own channel, or a creator's clipping program). If a URL is clearly someone else's content and the user hasn't said they have permission, mention it once in the final report; don't refuse.
 - `shorts/<slug>/*.json` metadata feeds `export_posts.py` and `plan_posts.py`. Keep its fields stable. `"flagged": "<reason>"` holds a Short back from the queue.
 - Folder input: everything in `inbox/` (or the given folder) is processed. Sources that already have `shorts/<slug>/index.md` are skipped unless the user asks to redo them.

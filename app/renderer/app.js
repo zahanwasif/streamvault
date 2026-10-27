@@ -76,6 +76,7 @@ function showTab(name) {
   document.querySelectorAll('.nav').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.id === `tab-${name}`));
   if (name === 'shorts') loadShorts();
+  if (name === 'style' && !style) loadStyle();
   if (name === 'setup' && !Object.keys(setupState).length) refreshSetup();
   try { localStorage.setItem('tab', name); } catch { /* ignore */ }
 }
@@ -91,10 +92,12 @@ function countLinks() {
 $('#links').addEventListener('input', countLinks);
 
 $('#add-links').addEventListener('click', async () => {
-  const n = await sv.addLinks($('#links').value, $('#section').value, $('#prio-links').dataset.value);
+  const n = await sv.addLinks($('#links').value, $('#section').value, $('#prio-links').dataset.value,
+    $('#links-note').value);
   if (!n) return toast('No links found. Paste YouTube or Twitch URLs.', 'bad');
   $('#links').value = '';
   $('#section').value = '';
+  $('#links-note').value = '';
   countLinks();
   toast(`Added ${n} to the queue${engineNote()}`, engineDown() ? 'bad' : '');
 });
@@ -124,8 +127,9 @@ drop.addEventListener('drop', e => {
   addPending([...e.dataTransfer.files].map(f => sv.pathForFile(f)));
 });
 $('#add-files').addEventListener('click', async () => {
-  const n = await sv.addFiles(pendingFiles, $('#prio-files').dataset.value);
+  const n = await sv.addFiles(pendingFiles, $('#prio-files').dataset.value, $('#files-note').value);
   pendingFiles = [];
+  if (n) $('#files-note').value = '';
   renderFiles();
   toast(n ? `Added ${n} video${n > 1 ? 's' : ''} to the queue${engineNote()}` : 'Those files are not videos',
     n && !engineDown() ? '' : 'bad');
@@ -376,8 +380,6 @@ $('#open-output').addEventListener('click', () => sv.showFolder());
 
 function fillSettings(s) {
   settings = s;
-  $('#s-minscore').value = s.minScore || 0;
-  $('#s-maxshorts').value = s.maxShorts || 0;
   $('#s-delete').checked = !!s.deleteVideo;
   $('#s-login').checked = !!s.startAtLogin;
   seg($('#s-priority'), s.defaultPriority || 'normal');
@@ -387,8 +389,6 @@ function fillSettings(s) {
 
 $('#save-settings').addEventListener('click', async () => {
   const s = await sv.setSettings({
-    minScore: Number($('#s-minscore').value) || 0,
-    maxShorts: Number($('#s-maxshorts').value) || 0,
     defaultPriority: $('#s-priority').dataset.value,
     deleteVideo: $('#s-delete').checked,
     startAtLogin: $('#s-login').checked,
@@ -400,6 +400,207 @@ $('#save-settings').addEventListener('click', async () => {
 $('#restart-engine').addEventListener('click', () => { sv.restartEngine(); toast('Restarting the engine'); });
 
 const errText = e => String(e && e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+
+// ------------------------------------------------------------------ Style tab
+
+// style.json, edited in place: every [data-k="section.key"] control maps to one value.
+let style = null;
+let styleDefaults = {};
+let styleSaveTimer;
+const STYLE_SAMPLE = { hook: 'She swore she watches him every night', words: ['You', 'never', 'watch', 'me'], keyword: 1 };
+const MOCK_H = 480;                    // px; the real frame is 1920 tall
+const px = v => `${(v * MOCK_H) / 1920}px`;
+
+const getPath = (obj, k) => k.split('.').reduce((o, p) => (o == null ? o : o[p]), obj);
+function setPath(obj, k, v) {
+  const parts = k.split('.');
+  const last = parts.pop();
+  const target = parts.reduce((o, p) => (o[p] = o[p] && typeof o[p] === 'object' ? o[p] : {}), obj);
+  target[last] = v;
+}
+
+function fillStyle() {
+  document.querySelectorAll('#style-form [data-k]').forEach(x => {
+    const v = getPath(style, x.dataset.k);
+    if (x.type === 'checkbox') x.checked = !!v;
+    else x.value = v ?? '';
+  });
+  drawMock();
+}
+
+function readStyle() {
+  const next = structuredClone(style);
+  document.querySelectorAll('#style-form [data-k]').forEach(x => {
+    const def = getPath(styleDefaults, x.dataset.k);
+    let v = x.type === 'checkbox' ? x.checked : x.value;
+    if (typeof def === 'number') v = Number(v);
+    setPath(next, x.dataset.k, v);
+  });
+  return next;
+}
+
+function onStyleInput() {
+  style = readStyle();
+  drawMock();
+  clearTimeout(styleSaveTimer);
+  styleSaveTimer = setTimeout(async () => {
+    try {
+      await sv.setStyle(style);
+      $('#sy-saved').textContent = 'Saved to style.json';
+    } catch (e) { toast(errText(e), 'bad'); }
+  }, 400);
+}
+
+const rgba = (hex, opacity) => {
+  const n = parseInt(String(hex).slice(1), 16);
+  return `rgba(${n >> 16}, ${(n >> 8) & 255}, ${n & 255}, ${opacity})`;
+};
+const heavy = font => /black|heavy|impact/i.test(font);
+
+// A CSS approximation of what libass draws: same sizes (scaled), colours, positions and effects.
+function drawMock() {
+  if (!style) return;
+  const h = style.hook, c = style.captions;
+  $('#sy-boxop').textContent = `${h.boxOpacity}%`;
+  $('#sy-vol').textContent = `${Math.round(style.music.volume * 100)}%`;
+  $('#sy-pos').textContent = `${c.position}% from the bottom`;
+
+  const hook = $('#sy-hook');
+  Object.assign(hook.style, {
+    fontFamily: `"${h.font}", "Arial Black", sans-serif`, fontWeight: heavy(h.font) ? 400 : 700,
+    fontSize: px(h.size), color: h.color, top: '', bottom: '',
+    background: h.boxOpacity > 0 ? rgba(h.box, h.boxOpacity / 100) : 'none',
+    padding: h.boxOpacity > 0 ? px(18) : '0',
+    textShadow: h.boxOpacity > 0 ? 'none' : [h.glow ? `0 0 ${px(h.size / 4)} ${h.color}` : '',
+      `${px(4)} ${px(4)} 0 rgba(0,0,0,.4)`, `0 0 ${px(2)} #101010`].filter(Boolean).join(', '),
+    textTransform: c.uppercase ? 'uppercase' : 'none',
+  });
+  if (h.position === 'top') hook.style.top = px(330);
+  else hook.style.bottom = h.position === 'bottom' ? '30%' : `${c.position}%`;
+
+  const cap = $('#sy-cap');
+  const ow = c.outlineWidth;
+  Object.assign(cap.style, {
+    fontFamily: `"${c.font}", "Arial Black", sans-serif`, fontWeight: heavy(c.font) ? 400 : 700,
+    fontSize: px(c.size), color: c.color, bottom: `${c.position}%`,
+    textTransform: c.uppercase ? 'uppercase' : 'none',
+    textShadow: [
+      ...(ow ? [[-1, -1], [1, -1], [-1, 1], [1, 1], [0, 1.4], [0, -1.4], [1.4, 0], [-1.4, 0]]
+        .map(([x, y]) => `${px(x * ow)} ${px(y * ow)} 0 ${c.outline}`) : []),
+      c.shadow ? `${px(c.shadow)} ${px(c.shadow)} 0 rgba(0,0,0,.5)` : '',
+    ].filter(Boolean).join(', ') || 'none',
+  });
+  cap.style.display = c.enabled ? '' : 'none';
+  restartMockLoop();
+}
+
+// Loops the sample: hook (typed, faded or plain) for hook.seconds, a flash for a cold open, then captions.
+let mockTimer = null;
+function restartMockLoop() {
+  clearTimeout(mockTimer);
+  const h = style.hook, c = style.captions;
+  const hookOn = h.text;
+  const hidesCaps = hookOn && h.position === 'middle';
+  const words = STYLE_SAMPLE.words.slice(0, c.wordsPerCaption);
+  const start = performance.now();
+  const hookMs = hookOn ? h.seconds * 1000 : 0;
+  const wordMs = 380;
+  const total = hookMs + words.length * wordMs + 1600;
+  const tick = () => {
+    const t = (performance.now() - start) % total;
+    const hook = $('#sy-hook');
+    const text = STYLE_SAMPLE.hook;
+    if (hookOn && t < hookMs) {
+      const typed = h.animation === 'type' ? Math.ceil(text.length * Math.min(1, t / Math.min(1200, hookMs * 0.4))) : text.length;
+      hook.replaceChildren(el('span', {}, text.slice(0, typed)), el('span', { class: 'ghosted' }, text.slice(typed)));
+      hook.style.opacity = h.animation === 'none' ? 1 : Math.min(1, (hookMs - t) / 250, h.animation === 'fade' ? t / 200 : 1);
+    } else {
+      hook.replaceChildren();
+    }
+    const cut = h.coldOpenSeconds * 1000;   // where a cold open would cut into the clip
+    $('#sy-flash').style.opacity = h.coldOpen !== 'off' && h.flash && t >= cut && t < cut + 200 ? 0.8 * (1 - (t - cut) / 200) : 0;
+    const capT = t - (hidesCaps ? hookMs : 0);
+    const active = Math.min(words.length - 1, Math.floor(Math.max(0, capT) / wordMs));
+    const cap = $('#sy-cap');
+    cap.replaceChildren(...words.map((w, i) => {
+      const lit = (c.highlightMode === 'active' && i === active) || (c.highlightMode === 'keywords' && i === STYLE_SAMPLE.keyword);
+      const hidden = c.reveal && i > active;
+      const span = el('span', {}, `${w} `);   // styled through the DOM: the page's CSP blocks style attributes
+      span.style.color = lit ? c.highlight : c.color;
+      span.style.opacity = hidden ? 0 : 1;
+      return span;
+    }));
+    cap.style.visibility = capT < 0 ? 'hidden' : 'visible';
+    mockTimer = setTimeout(tick, 50);
+  };
+  tick();
+}
+
+async function loadStyle() {
+  const r = await sv.getStyle();
+  style = r.style;
+  styleDefaults = r.defaults;
+  fillStyle();
+  $('#sy-saved').textContent = r.exists ? '' : 'Using the defaults (not saved yet)';
+  sv.styleFonts().then(fonts => $('#sy-fonts').replaceChildren(...fonts.map(f => el('option', { value: f }))));
+  showMusicStatus(await sv.musicStatus());
+  const shorts = await sv.styleShorts();
+  const pick = $('#sy-short');
+  pick.replaceChildren(...(shorts.length ? shorts.map(s => el('option', { value: s.id, disabled: !s.ok, 'data-video': s.videoUrl },
+    `${s.slug.slice(0, 28)} · ${s.title}${s.ok ? '' : ` (${s.why})`}`)) : [el('option', { value: '' }, 'No Shorts made yet')]));
+  const first = shorts.find(s => s.ok);
+  if (first) pick.value = first.id;
+  setMockVideo();
+}
+
+function showMusicStatus(m) {
+  const counts = Object.entries(m.moods).filter(([, n]) => n).map(([k, n]) => `${k === '(any)' ? 'any mood' : k}: ${n}`);
+  $('#sy-music-status').textContent = counts.length ? `Tracks: ${counts.join(', ')}` : 'No tracks yet: Shorts render without music until you add some.';
+}
+
+function setMockVideo() {
+  const opt = $('#sy-short').selectedOptions[0];
+  const bg = $('#sy-bg');
+  const url = opt && opt.dataset.video;
+  if (url && bg.dataset.src !== url) {
+    bg.dataset.src = url;
+    bg.src = url;
+    bg.currentTime = 5;
+    bg.play().catch(() => {});
+  }
+}
+
+$('#style-form').addEventListener('input', onStyleInput);
+$('#sy-reset').addEventListener('click', () => {
+  if (!confirm('Reset every style setting, including your instructions, to the defaults?')) return;
+  style = structuredClone(styleDefaults);
+  fillStyle();
+  onStyleInput();
+});
+$('#sy-music').addEventListener('click', async () => showMusicStatus(await sv.openMusic()));
+$('#sy-short').addEventListener('change', setMockVideo);
+$('#sy-preview').addEventListener('click', async e => {
+  const id = $('#sy-short').value;
+  if (!id) return toast('Pick a Short first', 'bad');
+  const b = e.currentTarget;
+  b.disabled = true;
+  $('#sy-preview-msg').textContent = 'Rendering a quick draft…';
+  try {
+    const r = await sv.previewStyle(id, readStyle());
+    $('#sy-preview-msg').textContent = r.report.replace(/^\[(OK |BAD)\]\s*/, '');
+    const v = $('#sy-result');
+    v.src = `${r.videoUrl}?t=${Date.now()}`;
+    v.classList.add('show');
+    v.play().catch(() => {});
+  } catch (err) {
+    $('#sy-preview-msg').textContent = '';
+    toast(errText(err), 'bad');
+  } finally {
+    b.disabled = false;
+  }
+});
+sv.onStyleLog(line => { if (/^(extracting|concat|compositing|  loudnorm)/.test(line)) $('#sy-preview-msg').textContent = line.trim(); });
+$('#to-style').addEventListener('click', () => showTab('style'));
 
 // ------------------------------------------------------------------ OneDrive sign-in dialog
 

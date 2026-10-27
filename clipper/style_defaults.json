@@ -1,0 +1,45 @@
+{
+  "clip": {
+    "minScore": 9,
+    "maxShorts": 3,
+    "minSeconds": 20,
+    "maxSeconds": 45
+  },
+  "hook": {
+    "text": true,
+    "seconds": 3.5,
+    "font": "Arial Black",
+    "size": 62,
+    "color": "#4CFF4C",
+    "box": "#000000",
+    "boxOpacity": 0,
+    "glow": true,
+    "position": "middle",
+    "animation": "type",
+    "coldOpen": "auto",
+    "coldOpenSeconds": 3.0,
+    "flash": true
+  },
+  "music": {
+    "enabled": true,
+    "folder": "music",
+    "volume": 0.4,
+    "duck": true
+  },
+  "captions": {
+    "enabled": true,
+    "font": "Arial Black",
+    "size": 70,
+    "color": "#FFFFFF",
+    "outline": "#000000",
+    "outlineWidth": 3,
+    "shadow": 4,
+    "highlight": "#4CFF4C",
+    "highlightMode": "keywords",
+    "position": 42,
+    "uppercase": true,
+    "wordsPerCaption": 3,
+    "reveal": true
+  },
+  "instructions": ""
+}

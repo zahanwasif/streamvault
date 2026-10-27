@@ -53,7 +53,7 @@ Notes:
 - **Why n8n's OAuth sign-ins aren't automatic:** they're browser sign-ins that only n8n's own page can run. That's why step 11 opens it for you.
 
 ## 3. Using the app
-- **Add:** paste links (an optional "only this part" range like `1:00:00-2:30:00`) or drop video files, and pick High, Normal or Low.
+- **Add:** paste links (an optional "only this part" range like `1:00:00-2:30:00`) or drop video files, and pick High, Normal or Low. **Instructions for Claude** (optional) apply to just those videos, e.g. "only the cooking part".
 - **Queue:**
   - One video runs at a time, highest priority first.
   - Each job shows its step: Download → Transcribe → Pack → Signals → Find & render → To OneDrive.
@@ -68,8 +68,25 @@ Notes:
   - Finished Shorts wait in `<workspace>\outbox\` until they're uploaded, then are deleted there. The originals stay in `shorts/`.
   - A failed upload retries after 1, 2, 5, then every 15 minutes.
   - A Short n8n already posted is never uploaded again.
-- **Settings:** minimum score and max Shorts per video (0 = the skill's defaults, 7 and 15), default priority, delete downloaded videos after export, start at Windows sign-in, and the engine's output.
+- **Settings:** default priority, delete downloaded videos after export, start at Windows sign-in, and the engine's output. Quality, length and the look are in **Style** (below).
 - **Closing the window** keeps the app running in the tray. Quit from the tray menu.
+
+## Style
+The **Style** tab sets which moments become Shorts and how they look. It saves to `<workspace>\style.json` as you change things. The engine reads that file fresh for every video and every render, so nothing restarts. Workspace updates never touch `style.json`, `music\` or `fonts\`.
+
+| Card | What it sets |
+|---|---|
+| **Quality & length** | Minimum score (default **9**/10), max Shorts per video (**3**), and length (**20–45 s**, cold open included). Quality over quantity: a weak video can make zero Shorts, and that's correct. |
+| **Hook** | The text banner Claude writes for each clip (≤ 8 words of curiosity, not the punchline): font, size, colour, glow or box, position, typed-on/fade, and how long it stays. The **cold open** plays the payoff first, under the banner, then the clip starts from the top. *When there's a clear payoff* lets Claude decide per clip. |
+| **Music** | A track under the voice, ducked while people talk, at the set volume. **Open music folder** makes `music\funny`, `hype`, `romantic` and `chill`. Claude picks the mood, and the renderer rotates through the tracks in that folder (or in `music\` itself). No tracks means no music. |
+| **Captions** | Font (any installed font; a font file dropped in `<workspace>\fonts\` works too), size, text/outline/highlight colours, shadow, height, UPPERCASE, words per caption, words appearing as they're spoken, and the highlight: the word being spoken, key words Claude picks, or off. |
+| **Instructions for Claude** | Plain words for every video, e.g. "yellow captions on funny clips, sarcastic hooks". Look changes Claude makes for one clip go into that clip's spec. |
+
+The phone on the right previews the look live with sample text. **Preview on a real clip** re-renders a past Short as a quick draft with the current settings (saved or not) and opens it; the real Short isn't changed. It needs that video's download, so it doesn't work after **Delete each downloaded video** has removed it.
+
+The defaults copy a popular clip-channel look: a ~3 s cold open of the payoff with a neon-green hook line typed on mid-screen, then heavy white captions with a coloured key word, over a beat that dips under speech.
+
+**Music licensing:** only put tracks in `music\` that you own or that are royalty-free for YouTube, such as the YouTube Audio Library (YouTube Studio → Audio Library) (check whether a track needs attribution, and add it to the description). A copyrighted song gets a Content ID claim: the Short earns nothing, can be blocked in some countries, and repeated claims hurt the channel.
 
 ## The Studio uploader (until the API audit clears)
 n8n picks the Short and starts the GitHub Actions workflow `youtube-upload.yml`. That run uploads through YouTube Studio with Playwright (`uploader/studio_upload.py`) and reports back, and n8n then moves the Short to `posted/`.

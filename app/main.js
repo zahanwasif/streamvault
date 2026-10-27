@@ -18,6 +18,7 @@ const { Secrets } = require('./secrets');
 const setup = require('./setup');
 const { GitHub } = require('./github');
 const { N8n, buildWorkflow } = require('./n8n');
+const { Style, listFonts } = require('./style');
 
 const VIDEO_EXTS = ['mp4', 'mov', 'mkv', 'avi', 'm4v', 'webm'];
 const PRIORITIES = ['high', 'normal', 'low'];
@@ -55,8 +56,6 @@ function defaultSettings() {
     sessionSavedAt: null,
     voicestudioUrl: 'http://127.0.0.1:3900',
     defaultPriority: 'normal',
-    minScore: 0,
-    maxShorts: 0,
     deleteVideo: false,
     startAtLogin: false,
   };
@@ -72,7 +71,8 @@ function loadSettings() {
   return settings;
 }
 
-const ENGINE_KEYS = ['repoDir', 'voicestudioUrl', 'minScore', 'maxShorts', 'deleteVideo'];
+// The Short style (style.json) is read by the engine for every video, so it needs no restart.
+const ENGINE_KEYS = ['repoDir', 'voicestudioUrl', 'deleteVideo'];
 function saveSettings(next) {
   const before = { ...settings };
   settings = { ...settings, ...next };
@@ -293,6 +293,9 @@ async function uploadTick() {
 
 // ------------------------------------------------------------------ engine
 
+const uvBin = () => process.env.STREAMVAULT_UV || 'uv';
+const pythonEnv = () => ({ ...process.env, PYTHONUTF8: '1', PYTHONUNBUFFERED: '1', VOICESTUDIO_URL: settings.voicestudioUrl });
+
 function setEngineStatus(state, message = '') {
   engineStatus = { state, message };
   emitToUi('engine-status', engineStatus);
@@ -313,12 +316,10 @@ function startEngine() {
   const args = ['run', '--project', 'video-use', 'python', 'clipper/run_queue.py', '--watch', '--parent-pipe',
     '--outbox', outboxDir()];
   if (settings.deleteVideo) args.push('--delete-video');
-  if (Number(settings.minScore) > 0) args.push('--min-score', String(settings.minScore));
-  if (Number(settings.maxShorts) > 0) args.push('--max-shorts', String(settings.maxShorts));
 
-  const proc = spawn(process.env.STREAMVAULT_UV || 'uv', args, {
+  const proc = spawn(uvBin(), args, {
     cwd: settings.repoDir,
-    env: { ...process.env, PYTHONUTF8: '1', PYTHONUNBUFFERED: '1', VOICESTUDIO_URL: settings.voicestudioUrl },
+    env: pythonEnv(),
     windowsHide: true,
     detached: process.platform !== 'win32', // own process group, so the whole tree can be stopped
   });
@@ -575,17 +576,22 @@ handle('onedrive-cancel', () => { login = null; sendOneDriveStatus(); });
 handle('onedrive-disconnect', disconnectOneDrive);
 handle('upload-now', () => { failures.clear(); uploadSoon(0); });
 
-handle('add-links', ({ links, section, priority }) => {
+// Free text for Claude about this one video ("only the cooking part"); goes into its prompt.
+const cleanInstructions = text => String(text || '').trim().slice(0, 2000) || null;
+
+handle('add-links', ({ links, section, priority, instructions }) => {
   const urls = [...new Set(String(links).match(/https?:\/\/[^\s"'<>]+/g) || [])]
     .map(u => u.replace(/[).,;\]]+$/, ''));
   const sec = /^\d[\d:]*-\d[\d:]*$/.test(String(section || '').trim()) ? section.trim() : null;
-  for (const url of urls) sendRequest({ op: 'add', kind: 'url', target: url, section: sec, priority });
+  const note = cleanInstructions(instructions);
+  for (const url of urls) sendRequest({ op: 'add', kind: 'url', target: url, section: sec, priority, instructions: note });
   sendPending();
   return urls.length;
 });
-handle('add-files', ({ files, priority }) => {
+handle('add-files', ({ files, priority, instructions }) => {
   const ok = files.filter(f => VIDEO_EXTS.includes(path.extname(f).slice(1).toLowerCase()) && fs.existsSync(f));
-  for (const f of ok) sendRequest({ op: 'add', kind: 'file', target: f, priority });
+  const note = cleanInstructions(instructions);
+  for (const f of ok) sendRequest({ op: 'add', kind: 'file', target: f, priority, instructions: note });
   sendPending();
   return ok.length;
 });
@@ -631,6 +637,26 @@ handle('show-folder', async () => {
   else shell.openPath(path.join(settings.repoDir, 'shorts'));
 });
 
+// ------------------------------------------------------------------ style (the Style tab)
+
+const style = () => new Style(settings.repoDir);
+let fontCache = null;
+
+handle('style:get', () => style().get());
+handle('style:set', next => style().set(next));
+handle('style:fonts', async () => (fontCache = fontCache || await listFonts()));
+handle('style:shorts', () => style().shorts(mediaUrl));
+handle('style:preview', async ({ id, style: draft }) => {
+  const r = await style().preview(id, draft, { uv: uvBin(), env: pythonEnv(), log: line => emitToUi('style-log', line) });
+  shell.openPath(r.file);
+  return { ...r, videoUrl: mediaUrl(r.file) };
+});
+handle('music:open', () => {
+  const m = style().music();
+  shell.openPath(m.dir);
+  return m;
+});
+handle('music:status', () => style().music());
 
 // ------------------------------------------------------------------ setup (the Setup tab)
 
@@ -908,6 +934,12 @@ if (!app.requestSingleInstanceLock()) {
     if (ws.needsCopy && ws.installed) {
       workspace.sync(settings.repoDir);
       pythonStale = true;
+    }
+    if (style().migrate(settings)) logEngine('moved the minimum score and max Shorts into style.json');
+    if ('minScore' in settings || 'maxShorts' in settings) {
+      delete settings.minScore;
+      delete settings.maxShorts;
+      writeJsonAtomic(settingsFile(), settings);
     }
     await setup.refreshPath();
     drive = makeDrive();

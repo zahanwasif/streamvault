@@ -2,15 +2,15 @@
 //
 // The installer carries a copy of the scripts (resources/workspace, made by
 // scripts/stage-workspace.js). Whenever that copy's version differs from the one recorded in the
-// workspace, the code folders are replaced. Media and state (sources/, shorts/, inbox/, outbox/,
-// .worker/) are never touched. Running unpackaged (npm start in the repo), the repo is the workspace
+// workspace, the code folders are replaced. Media, state and the user's own files (sources/, shorts/,
+// inbox/, outbox/, .worker/, music/, fonts/, style.json) are never touched. Running unpackaged (npm start in the repo), the repo is the workspace
 // and nothing is copied.
 
 const fs = require('fs');
 const path = require('path');
 
 const CODE = ['clipper', 'uploader', path.join('.claude', 'skills', 'shorts-clipper'), 'n8n'];
-const DATA = ['sources', 'shorts', 'inbox', 'outbox', '.worker'];
+const DATA = ['sources', 'shorts', 'inbox', 'outbox', '.worker', 'music', 'fonts'];
 const STAMP = '.streamvault-version';
 
 function readJson(file) {

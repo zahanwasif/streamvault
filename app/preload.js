@@ -25,8 +25,8 @@ contextBridge.exposeInMainWorld('api', {
   setupAction: (action, values) => call('setup-action', { action, values }),
   setupSecrets: () => call('setup-secrets'),
 
-  addLinks: (links, section, priority) => call('add-links', { links, section, priority }),
-  addFiles: (files, priority) => call('add-files', { files, priority }),
+  addLinks: (links, section, priority, instructions) => call('add-links', { links, section, priority, instructions }),
+  addFiles: (files, priority, instructions) => call('add-files', { files, priority, instructions }),
   pickFiles: () => call('pick-files'),
   pickFolder: () => call('pick-folder'),
   pathForFile: file => webUtils.getPathForFile(file),
@@ -44,6 +44,14 @@ contextBridge.exposeInMainWorld('api', {
   openExternal: url => call('open-external', url),
   showFolder: () => call('show-folder'),
 
+  getStyle: () => call('style:get'),
+  setStyle: next => call('style:set', next),
+  styleFonts: () => call('style:fonts'),
+  styleShorts: () => call('style:shorts'),
+  previewStyle: (id, style) => call('style:preview', { id, style }),
+  openMusic: () => call('music:open'),
+  musicStatus: () => call('music:status'),
+
   onEvent: on('engine-event'),
   onEngineStatus: on('engine-status'),
   onEngineLog: on('engine-log'),
@@ -52,4 +60,5 @@ contextBridge.exposeInMainWorld('api', {
   onOneDriveStatus: on('onedrive-status'),
   onShortsChanged: on('shorts-changed'),
   onSetupLog: on('setup-log'),
+  onStyleLog: on('style-log'),
 });

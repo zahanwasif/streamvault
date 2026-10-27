@@ -24,6 +24,11 @@ app/build/
 uploader/out/
 *session*.b64
 
+# The user's own style and music (the app's Style tab), and fonts they add for captions
+style.json
+music/
+fonts/
+
 # Secrets
 .env
 .env.*

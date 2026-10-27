@@ -2,7 +2,8 @@
 
 The app (app/) starts this with --watch and talks to it through files:
     .worker/requests/*.json   the app's commands, applied in name order and then deleted:
-        {"op": "add", "kind": "url"|"file", "target": "...", "section": "1:00:00-2:30:00", "priority": "high"}
+        {"op": "add", "kind": "url"|"file", "target": "...", "section": "1:00:00-2:30:00", "priority": "high",
+         "instructions": "free text for Claude, for this video only"}
         {"op": "retry"|"cancel"|"remove", "id": "j0007"}
         {"op": "priority", "id": "j0007", "priority": "low"}   (the app re-prioritises posts already exported)
     .worker/state.json        every job, its stage and result (only this script writes it)
@@ -17,6 +18,7 @@ Each job runs these stages, one job at a time, highest priority first, then olde
     pack        video-use/helpers/pack_transcripts.py  → edit/takes_packed.md
     signals     clipper/signals.py                     → edit/signals.md
     clip        headless Claude Code, shorts-clipper skill from step 3 → shorts/<slug>/
+                (the user's style.json, read fresh for each job, sets the rules and the look)
     export      clipper/export_posts.py                → outbox/<post id>/ (video.mp4 + post.json)
 The app uploads each outbox folder to online OneDrive (StreamVault/ready/<post id>/) and deletes it;
 the n8n poster takes it from there. The engine itself never talks to OneDrive.
@@ -30,11 +32,14 @@ outlives the app. Only one engine runs at a time: a second one exits with code 3
 Usage:
     uv run --project video-use python clipper/run_queue.py --watch [--outbox DIR] [--delete-video]
     uv run --project video-use python clipper/run_queue.py            # run what's queued, then exit
+    uv run --project video-use python clipper/run_queue.py --print-prompt <slug> [--instructions "..."]
+                                                                        # dry run: the clip prompt only
 """
 
 from __future__ import annotations
 
 import _env
+import style as styles
 
 import argparse
 import json
@@ -160,6 +165,7 @@ def _apply(state: dict, pending: list[Path]) -> None:
                 "section": req.get("section") or None, "priority": prio, "status": "queued", "stage": None,
                 "attempts": 0, "added": now(), "title": None, "slug": None, "error": None,
                 "shorts_rendered": 0, "posts": [],
+                "instructions": str(req.get("instructions") or "").strip()[:2000] or None,
             }
             emit("job", job=jobs[jid])
         elif job and op == "retry" and job["status"] in ("failed", "cancelled", "retry"):
@@ -295,6 +301,14 @@ def count_shorts(shorts: Path) -> int:
     return len(list(shorts.glob("[0-9][0-9]_*.mp4"))) if shorts.exists() else 0
 
 
+def job_style(args: argparse.Namespace) -> dict:
+    """The user's style.json, read fresh for every job. Without one, --min-score/--max-shorts still apply."""
+    if (_env.ROOT / "style.json").exists():
+        return styles.load(_env.ROOT)
+    fallback = {"clip": {k: v for k, v in (("minScore", args.min_score), ("maxShorts", args.max_shorts)) if v}}
+    return styles.resolve(styles.load(_env.ROOT), fallback)
+
+
 def process(state: dict, job: dict, args: argparse.Namespace) -> None:
     py = sys.executable
     log = LOGS / f"{job['id']}.log"
@@ -334,10 +348,7 @@ def process(state: dict, job: dict, args: argparse.Namespace) -> None:
 
         stage("clip")
         (shorts / "FAILED.txt").unlink(missing_ok=True)
-        wanted = [f"minimum score {args.min_score:g}" if args.min_score else "",
-                  f"at most {args.max_shorts} Shorts" if args.max_shorts else ""]
-        wanted = [w for w in wanted if w]
-        settings = f" User settings for this run: {', '.join(wanted)}." if wanted else ""
+        settings = styles.settings_line(job_style(args), job.get("instructions") or "")
         result: dict = {}
 
         def on_claude(line: str) -> None:
@@ -389,14 +400,19 @@ def main() -> int:
                     help="where finished Shorts go for the app to upload (default: outbox/)")
     ap.add_argument("--max-attempts", type=int, default=2)
     ap.add_argument("--claude-hours", type=float, default=8, help="time limit for one Claude run")
-    ap.add_argument("--min-score", type=float, default=0, help="override the skill's minimum score")
-    ap.add_argument("--max-shorts", type=int, default=0, help="override the skill's maximum Shorts per source")
+    ap.add_argument("--min-score", type=float, default=0, help="minimum score when there is no style.json")
+    ap.add_argument("--max-shorts", type=int, default=0, help="maximum Shorts per source when there is no style.json")
+    ap.add_argument("--print-prompt", metavar="SLUG", help="print the clip prompt for sources/SLUG and exit")
+    ap.add_argument("--instructions", default="", help="with --print-prompt: per-video instructions")
     ap.add_argument("--tools", default=os.environ.get("STREAMVAULT_CLAUDE_TOOLS", DEFAULT_TOOLS),
                     help="--allowedTools for the headless Claude run")
     ap.add_argument("--delete-video", action="store_true",
                     help="delete a downloaded source video once its Shorts are exported")
     ap.add_argument("--parent-pipe", action="store_true", help="exit when stdin closes (the app uses this)")
     args = ap.parse_args()
+    if args.print_prompt:
+        print(PROMPT.format(slug=args.print_prompt, settings=styles.settings_line(job_style(args), args.instructions)))
+        return 0
     if args.parent_pipe:
         exit_with_parent()
 
