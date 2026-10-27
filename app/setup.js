@@ -163,9 +163,10 @@ async function installTool(id, ctx, onLine) {
 // ------------------------------------------------------------------ Python environment + skill
 
 async function pythonEnv(workspace) {
-  const r = await run('uv', ['run', '--project', 'video-use', 'python', '-c', 'import numpy, requests; print("ok")'],
+  // No quotes in the code: on Windows this goes through cmd, which mangles nested quotes.
+  const r = await run('uv', ['run', '--project', 'video-use', 'python', '-c', 'import numpy, requests; print(6*7)'],
     { cwd: workspace, timeout: 60000 });
-  if (!(r.code === 0 && /ok/.test(r.out))) return { ok: false, message: 'not set up yet' };
+  if (!(r.code === 0 && /42/.test(r.out))) return { ok: false, message: 'not set up yet' };
   return skillLinked(workspace) ? { ok: true, message: 'video-use environment ready' }
     : { ok: false, message: 'packages installed, but the video-use skill isn\'t linked for Claude Code yet' };
 }
