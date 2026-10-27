@@ -95,6 +95,9 @@ def call(key: str, path: str, json_body: dict, timeout: float) -> bytes:
                       headers={"xi-api-key": key, "Content-Type": "application/json"})
     if r.status_code == 401:
         raise ApiError("ElevenLabs rejected the API key (401): check it in Setup")
+    if r.status_code == 402 and "paid_plan_required" in r.text:
+        what = "Music" if path == "/v1/music" else "This"
+        raise ApiError(f"{what} needs a paid ElevenLabs plan (402). Upgrade at elevenlabs.io/pricing, then run it again.")
     if r.status_code in (402, 429) or (r.status_code == 400 and "quota" in r.text.lower()):
         raise ApiError(f"ElevenLabs: out of credits or rate-limited ({r.status_code}): {r.text[:200]}")
     if r.status_code != 200:
