@@ -328,33 +328,18 @@ td.st-done { color: var(--ok); } td.st-failed { color: var(--bad); } td.st-queue
 .connect ol.steps { margin-top: 6px; }
 
 /* ---------- style */
-.style-grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 18px; align-items: start; }
+.style-grid { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 18px; align-items: start; }
 .style-side { position: sticky; top: 0; display: flex; flex-direction: column; gap: 10px; }
-.style-form .row .field input:not([type]), .style-form .row .field input[list] { min-width: 150px; }
 .style-form .row .field input[type="number"] { min-width: 0; width: 96px; }
-.style-form .row .field input[type="color"] { width: 56px; min-width: 0; height: 36px; padding: 2px; cursor: pointer; }
-.style-form .row .field input[type="range"], .style-form > .card > .field input[type="range"] { padding: 0; min-width: 160px; accent-color: var(--accent); }
-.style-form .check { margin-top: 0; align-self: center; }
-.style-form .card > .check + .row { margin-top: 12px; }
 .style-form .hint { margin: 10px 0 0; }
+.style-form textarea[data-k="instructions"] { font-size: 14px; line-height: 1.5; }
+.chips.examples { flex-wrap: wrap; margin-top: 12px; }
+.chips.examples .chip { font-size: 12.5px; padding: 4px 10px; }
 .hint code { font-size: 12px; }
-.center { text-align: center; margin: 0; }
-.mock {
-  position: relative; width: 270px; height: 480px; margin: 0 auto; overflow: hidden; border-radius: 16px;
-  background: linear-gradient(160deg, #3b3355, #1d2a3a 55%, #3a2a22); box-shadow: 0 8px 30px rgb(0 0 0 / 0.35);
-}
-/* A past Short as backdrop: blurred, so its burned-in captions don't read as part of the preview. */
-.mock video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; filter: blur(7px) brightness(0.75); transform: scale(1.08); }
-.mock-hook, .mock-cap {
-  position: absolute; left: 50%; transform: translateX(-50%); width: max-content; max-width: calc(100% - 30px);
-  text-align: center; line-height: 1.15; white-space: normal;
-}
-.mock-hook:empty { display: none; }
-.mock-hook .ghosted { opacity: 0; }
-.mock-flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
-#sy-short { margin-bottom: 4px; }
+#sy-short { margin: 8px 0 4px; }
 #sy-result { display: none; width: 100%; aspect-ratio: 9 / 16; margin-top: 12px; border-radius: 10px; background: #000; }
 #sy-result.show { display: block; }
+#sy-plan, #sy-import-log { max-height: 220px; }
 .field.grow input { min-width: 0; }
 @media (max-width: 1050px) {
   .style-grid { grid-template-columns: 1fr; }

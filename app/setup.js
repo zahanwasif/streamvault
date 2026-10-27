@@ -174,6 +174,12 @@ async function syncPython(workspace, onLine) {
   onLine('$ uv sync (video-use)');
   const r = await run('uv', ['sync'], { cwd: path.join(workspace, 'video-use'), onLine });
   if (r.code !== 0) throw new Error(`uv sync failed (exit ${r.code})`);
+  // Face tracking (clipper/track.py). Not in video-use's own dependencies, so it goes in after the
+  // sync, which is exact and would remove it; `uv run` leaves it alone.
+  onLine('$ uv pip install opencv-python-headless');
+  const cv = await run('uv', ['pip', 'install', '--python', path.join('.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'),
+    'opencv-python-headless'], { cwd: path.join(workspace, 'video-use'), onLine });
+  if (cv.code !== 0) onLine('could not install OpenCV: Shorts render with a fixed crop instead of following faces');
   // The packages are in place either way; a link failure shows on the step, not as a failed sync.
   try {
     onLine(linkSkill(workspace));

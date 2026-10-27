@@ -46,11 +46,12 @@ contextBridge.exposeInMainWorld('api', {
 
   getStyle: () => call('style:get'),
   setStyle: next => call('style:set', next),
-  styleFonts: () => call('style:fonts'),
   styleShorts: () => call('style:shorts'),
   previewStyle: (id, style) => call('style:preview', { id, style }),
   openMusic: () => call('music:open'),
   musicStatus: () => call('music:status'),
+  openSfx: () => call('sfx:open'),
+  importMusic: (links, mood) => call('music:import', { links, mood }),
 
   onEvent: on('engine-event'),
   onEngineStatus: on('engine-status'),

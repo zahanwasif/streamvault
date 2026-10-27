@@ -18,7 +18,11 @@
     "animation": "type",
     "coldOpen": "auto",
     "coldOpenSeconds": 3.0,
-    "flash": true
+    "flash": true,
+    "loop": true,
+    "voice": true,
+    "voicePreset": "narrator",
+    "voiceVolume": 1.0
   },
   "music": {
     "enabled": true,
@@ -40,6 +44,20 @@
     "uppercase": true,
     "wordsPerCaption": 3,
     "reveal": true
+  },
+  "zoom": {
+    "enabled": true,
+    "scale": 1.15,
+    "auto": true
+  },
+  "sfx": {
+    "enabled": true,
+    "folder": "sfx",
+    "volume": 0.8,
+    "autoCuts": true
+  },
+  "framing": {
+    "track": true
   },
   "instructions": ""
 }

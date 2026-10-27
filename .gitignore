@@ -27,6 +27,7 @@ uploader/out/
 # The user's own style and music (the app's Style tab), and fonts they add for captions
 style.json
 music/
+sfx/
 fonts/
 
 # Secrets

@@ -18,7 +18,7 @@ const { Secrets } = require('./secrets');
 const setup = require('./setup');
 const { GitHub } = require('./github');
 const { N8n, buildWorkflow } = require('./n8n');
-const { Style, listFonts } = require('./style');
+const { Style } = require('./style');
 
 const VIDEO_EXTS = ['mp4', 'mov', 'mkv', 'avi', 'm4v', 'webm'];
 const PRIORITIES = ['high', 'normal', 'low'];
@@ -640,14 +640,14 @@ handle('show-folder', async () => {
 // ------------------------------------------------------------------ style (the Style tab)
 
 const style = () => new Style(settings.repoDir);
-let fontCache = null;
+const claudeBin = () => process.env.CLAUDE_BIN || 'claude';
+const styleLog = line => emitToUi('style-log', String(line).slice(0, 300));
 
 handle('style:get', () => style().get());
 handle('style:set', next => style().set(next));
-handle('style:fonts', async () => (fontCache = fontCache || await listFonts()));
 handle('style:shorts', () => style().shorts(mediaUrl));
 handle('style:preview', async ({ id, style: draft }) => {
-  const r = await style().preview(id, draft, { uv: uvBin(), env: pythonEnv(), log: line => emitToUi('style-log', line) });
+  const r = await style().preview(id, draft, { uv: uvBin(), claude: claudeBin(), env: pythonEnv(), log: styleLog });
   shell.openPath(r.file);
   return { ...r, videoUrl: mediaUrl(r.file) };
 });
@@ -656,7 +656,13 @@ handle('music:open', () => {
   shell.openPath(m.dir);
   return m;
 });
+handle('sfx:open', () => {
+  const m = style().music();
+  shell.openPath(m.sfxDir);
+  return m;
+});
 handle('music:status', () => style().music());
+handle('music:import', ({ links, mood }) => style().importMusic(links, mood, { uv: uvBin(), env: pythonEnv(), log: styleLog }));
 
 // ------------------------------------------------------------------ setup (the Setup tab)
 
@@ -725,6 +731,15 @@ const CHECKS = {
         ? 'the GitHub token can\'t read repository secrets: give it Secrets: Read and write' : e.message };
     }
   },
+  async elevenlabs() {
+    const lib = style().music();
+    const counts = `${Object.values(lib.moods).reduce((a, b) => a + b, 0)} music tracks, ${Object.values(lib.sfx).reduce((a, b) => a + b, 0)} sound effects`;
+    if (!secrets.get('elevenlabsApiKey')) return { ok: true, optional: true, set: false, message: `no API key · ${counts}`, library: lib };
+    const r = await soundLibrary(['--check']);
+    const line = r.lines.filter(l => !/WARN/.test(l)).pop() || '';
+    return { ok: r.code === 0, optional: true, set: true, library: lib,
+      message: r.code === 0 ? `${line} · ${counts}` : line.replace(/^stopped: /, '') };
+  },
   async youtubeApi() {
     const set = !!(settings.googleClientId && secrets.get('googleClientSecret'));
     return { ok: true, optional: true, set, message: set ? 'Google OAuth client saved' : 'skipped: posting goes through Studio' };
@@ -747,8 +762,24 @@ const CHECKS = {
   },
 };
 
+// clipper/sound_library.py with the ElevenLabs key in its environment (and nowhere else).
+function soundLibrary(args, log = () => {}) {
+  return new Promise((resolve, reject) => {
+    const p = spawn(uvBin(), ['run', '--project', 'video-use', 'python', 'clipper/sound_library.py', ...args], {
+      cwd: settings.repoDir, windowsHide: true,
+      env: { ...pythonEnv(), ELEVENLABS_API_KEY: secrets.get('elevenlabsApiKey') || '' },
+    });
+    const lines = [];
+    const onLine = line => { if (line.trim()) { lines.push(line); log(line); } };
+    readline.createInterface({ input: p.stdout }).on('line', onLine);
+    readline.createInterface({ input: p.stderr }).on('line', onLine);
+    p.on('error', reject);
+    p.on('exit', code => resolve({ code, lines }));
+  });
+}
+
 async function saveSetup(values) {
-  const secretKeys = ['n8nApiKey', 'msClientSecret', 'githubToken', 'googleClientSecret'];
+  const secretKeys = ['n8nApiKey', 'msClientSecret', 'githubToken', 'googleClientSecret', 'elevenlabsApiKey'];
   secrets.set(Object.fromEntries(Object.entries(values).filter(([k]) => secretKeys.includes(k))));
   const plain = Object.fromEntries(Object.entries(values).filter(([k]) => !secretKeys.includes(k)));
   if (Object.keys(plain).length) saveSettings(plain);
@@ -835,6 +866,12 @@ const ACTIONS = {
     log('activated');
   },
   'open': ({ url }) => { if (/^https?:\/\//.test(url)) shell.openExternal(url); },
+  async 'elevenlabs.build'({ what }, log) {
+    const args = what === 'sfx' ? ['--sfx'] : what === 'music' ? ['--music'] : ['--sfx', '--music'];
+    const r = await soundLibrary(args, log);
+    if (r.code !== 0) throw new Error(r.lines.filter(l => /stopped|no ElevenLabs/.test(l)).pop() || `exit ${r.code}`);
+    return { message: r.lines.filter(l => /^done/.test(l)).pop() || 'done' };
+  },
 };
 
 handle('setup-check', async step => {
@@ -935,7 +972,7 @@ if (!app.requestSingleInstanceLock()) {
       workspace.sync(settings.repoDir);
       pythonStale = true;
     }
-    if (style().migrate(settings)) logEngine('moved the minimum score and max Shorts into style.json');
+    if (style().migrate(settings)) logEngine('style.json now keeps only Quality & length and your instructions');
     if ('minScore' in settings || 'maxShorts' in settings) {
       delete settings.minScore;
       delete settings.maxShorts;

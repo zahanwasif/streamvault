@@ -18,7 +18,9 @@ Built on video-use (`video-use/SKILL.md`). Its production rules still apply: cut
 | Clip length | **20–45 s** (cold open included) |
 | Parallel renders | 3 |
 
-The user's `style.json` in the repo root (written by the app's **Style** tab) holds their own values for these (`clip`), the hook, music and caption look, and free-text `instructions`; follow it when it exists. The app's runs spell these out in the prompt as "User settings for this run". The user can also override anything in their message ("only 8s and up", "max 5", "yellow captions").
+The user's `style.json` in the repo root (written by the app's **Style** tab) holds their own values for these (`clip`) and free-text `instructions`. The app's runs spell both out in the prompt as "User settings for this run". The user can also override anything in their message ("only 8s and up", "max 5", "yellow captions").
+
+**The look is your call, from the instructions.** There are no style settings: the user describes what they want in plain words, and you turn that into each clip's spec (`hook_text`, `cold_open`, `music_mood`, `emphasis`, `zooms`, `sfx`, `voice_hook`, and `style` for anything visual). Where the instructions say nothing, the defaults apply (see **Style keys**). "Always …" instructions apply to every clip; "on funny clips …" only to those.
 
 ## Quality bar
 Quality over quantity: every Short goes out under the user's name.
@@ -38,8 +40,10 @@ $PY clipper/transcribe_long.py sources/<slug> [--engine local|scribe] [--languag
 $PY video-use/helpers/pack_transcripts.py --edit-dir sources/<slug>/edit
 $PY clipper/signals.py sources/<slug>
 $PY clipper/words.py sources/<slug> <start> <end>
+$PY video-use/helpers/timeline_view.py <video> <start> <end> -o edit/verify/cand_<start>.png   # filmstrip + waveform + words
+$PY clipper/track.py <video> <start> <end> --layout '<layout json>' --png edit/verify/track_<start>.png
 $PY clipper/render_short.py sources/<slug>/edit/clips/*.json --jobs 3
-$PY clipper/sheet.py shorts/<slug>
+$PY clipper/review.py shorts/<slug>
 ```
 
 ## Pipeline (per source)
@@ -80,6 +84,8 @@ Score honestly and low: a 9 is a clip you would send a friend. Anything with set
 
 Hard skips: dead air, ads/sponsor reads, "be right back" screens, anything that needs the previous 5 minutes to make sense, slurs, or sexual content.
 
+**Watch the best ones.** The transcript only tells you what was said. For the top ~8 candidates (the ones that could reach the minimum), run `timeline_view.py` on the candidate window and Read the PNG: a filmstrip of frames with the waveform and words. Judge what a viewer *sees*: is there a visible reaction or action at the payoff (a face breaking, a jump, a fail)? Is the subject on screen and facing the camera, or turned away, off-frame, behind a menu? Raise the score for a strong visual payoff, lower it (or skip) when the moment is invisible or the subject is out of shot.
+
 Write all candidates to `sources/<slug>/edit/candidates.json`.
 
 ### 4. Select
@@ -98,17 +104,24 @@ Run `words.py` around each clip (±10 s) to get exact word times.
 - `cold_open`: a flash-forward of the payoff (`{start, end}` in source seconds, about `hook.coldOpenSeconds` long, usually the reaction or the punchline), played first under the hook text before the clip starts from the top. With `coldOpen: auto` set it only when there is a clear payoff or reaction that hooks on its own; leave it out otherwise. With `always`, always set one; with `off`, never.
 - `music_mood`: `funny`, `hype`, `romantic` or `chill`, matching the clip.
 - `emphasis`: 1–3 words per caption-worth of speech to colour, when the caption highlight is set to keywords: the punch words (names, numbers, the reaction word), never filler.
-- `style`: only when the user's instructions ask for something per clip (e.g. "yellow captions on funny clips" → `{"captions": {"highlight": "#FFE14D"}}`). Same keys as `style.json`; colours are `#RRGGBB`.
+- `style`: whatever the user's instructions change about the look, for this clip (e.g. "yellow captions on funny clips" → `{"captions": {"highlight": "#FFE14D"}}`). Keys in **Style keys** below; colours are `#RRGGBB`.
 
-### 6. Pick the layout (once per source, re-check when the scene changes)
-Grab 2–3 frames from different times of the source (`ffmpeg -ss <t> -i <video> -frames:v 1 -vf scale=960:-2 edit/verify/layout_<t>.png`) and Read them.
+**Retention** (a visual or audio change every 2–3 s keeps people watching):
+- `zooms`: `[{"at": <source s>, "dur": 0.6, "scale": 1.15}]`, a quick punch-in on the payoff, the reaction face and the punch words; 1–4 per clip, never on dead air. The cold open's start gets one automatically.
+- `sfx`: `[{"at": <source s>, "sound": "impact/boom"}]`, tied to something visible: a boom on the punchline, a gasp or laugh on a reaction, a record scratch on an awkward stop, a ding on a correct answer. `sound` is a file in `sfx/` (`sfx/library.json` lists them with tags) or `category/tag` (`transition/whoosh`, `impact/boom`, `reaction/laugh`, `reaction/gasp`, `ui/pop`) or a category. A whoosh on each cut and a riser into the payoff are added automatically. 1–3 of your own per clip: fewer, well-placed effects beat a wall of noise.
+- `voice_hook`: a narrator line spoken over the cold open (VoiceStudio, a stock voice), or `true` to speak `hook_text`. Use it when the instructions ask for a voice, or when the cold open has little speech of its own and the hook needs saying; not when the cold open is someone talking.
+- **Loop ending:** end on a line or beat that leads back into the cold open (the question the payoff answers, a reaction that matches the first frame), so the replay feels continuous. Never end on a call to action or "follow for more".
 
+### 6. Frame each clip: keep the subject in view
+Grab 2–3 frames from different times of the source (`ffmpeg -ss <t> -i <video> -frames:v 1 -vf scale=960:-2 edit/verify/layout_<t>.png`) and Read them to see what kind of video it is. Then, **for every clip**, run `track.py` on its range with the layout you have in mind and Read the PNG: green is what the Short shows, red is the face it follows. Its JSON line gives `coverage` (share of frames with the face inside the Short) and `detected` (share with any face).
+
+- **One person who moves (IRL, walking, standing up)** → `{"type": "track"}`: the crop follows their face smoothly. The default for IRL streams.
+- **Talking head who stays put / podcast seat** → `{"type": "center", "cx": <0–1 horizontal centre of the face>}`, or `track`.
 - **Facecam over gameplay** → `{"type": "split", "cam": [x, y, w, h], "game": [x, y, w, h], "cam_height": 768}`. Boxes are fractions 0–1 of the frame. Measure the cam box tightly from the frame (exclude borders and overlays). `game` is the region that matters, usually the centre ~60–75% of the width at full height. Use `cam_height` 640–860 depending on how important the face is.
-- **Talking head / IRL / podcast, one main person** → `{"type": "center", "cx": <0–1 horizontal centre of the speaker's face>}`.
-- **Two people side by side, wide shots, or anything a 9:16 crop would ruin** → `{"type": "blur"}`.
+- **Two people both mattering, far apart, or wide shots a 9:16 crop would ruin** → `{"type": "blur"}`.
 - **Already vertical source** → `{"type": "fit"}`.
 
-If the facecam moves or disappears in some clips, give those clips their own layout.
+Coverage under 0.8 with faces detected means the subject leaves the Short: try `track`, re-measure the cam box, move `cx`, or switch to `blur`. The renderer checks this too and reports `[BAD] subject out of frame`. If the facecam moves or disappears in some clips, give those clips their own layout. If the face sits where the captions go, move them with `style.captions.position`.
 
 ### 7. Write clip specs
 For clip NN (01 = highest score), write `sources/<slug>/edit/clips/NN.json`:
@@ -122,8 +135,11 @@ For clip NN (01 = highest score), write `sources/<slug>/edit/clips/NN.json`:
   "hook_text": "HE DID NOT SEE THAT COMING",
   "emphasis": ["never", "million"],
   "music_mood": "funny",
+  "zooms": [{"at": 836.4, "dur": 0.6, "scale": 1.15}],
+  "sfx": [{"at": 836.4, "sound": "impact/boom"}],
+  "voice_hook": true,
   "style": {},
-  "layout": {"type": "split", "cam": [0.72, 0.05, 0.26, 0.30], "game": [0.15, 0, 0.7, 1], "cam_height": 768},
+  "layout": {"type": "track"},
   "captions": true,
   "output": "<abs>/shorts/<slug>/NN_<category>_<title-slug>.mp4",
   "meta": {
@@ -140,16 +156,18 @@ For clip NN (01 = highest score), write `sources/<slug>/edit/clips/NN.json`:
 }
 ```
 
-Add `"grade": "neutral_punch"` only if frames look flat or dark. Leave out `cold_open`, `hook_text`, `emphasis` or `style` when they don't apply.
+Add `"grade": "neutral_punch"` only if frames look flat or dark. Leave out `cold_open`, `hook_text`, `emphasis`, `zooms`, `sfx`, `voice_hook` or `style` when they don't apply.
 
 ### 8. Render
-`render_short.py sources/<slug>/edit/clips/*.json --jobs 3`. Each line reports `[OK ]`, `[BAD]` (wrong size, duration or length) or `[ERR]`. Fix BAD/ERR specs and re-render just those. The renderer applies the user's `style.json` itself (captions, hook banner, music); a "no music" note means `music/` has no tracks: mention it in the report, it's not an error.
+`render_short.py sources/<slug>/edit/clips/*.json --jobs 3`. Each line reports `[OK ]`, `[BAD]` (wrong size, duration or length) or `[ERR]`. Fix BAD/ERR specs and re-render just those. `[BAD] subject out of frame` means fix the layout (step 6). Notes like "no music", "no sound effects" or "voice hook skipped" mean the library is empty or VoiceStudio isn't answering: mention them in the report, they're not errors.
 
 ### 9. Self-check (no user stops)
-Run `$PY clipper/sheet.py shorts/<slug>`. It writes `shorts/<slug>/_sheet.png`, one numbered frame per Short at 1.0 s (`--at 3` for another moment). Read the sheet and check:
-- the face is fully in frame
+Run `$PY clipper/review.py shorts/<slug>`. It writes `shorts/<slug>/_review_NN.png` per Short: the first look at 0.3 s, the end of the hook, both sides of each cut, the payoff, and the last frame next to the first (the loop seam). Read every one and check:
+- the subject is in frame in every shot (the whole face, not cut by the edge)
 - the split cam box isn't showing gameplay or borders
 - captions and the hook banner are readable and not covering the face
+- the first look grabs on its own, and the zoom lands on the reaction, not on dead air
+- the loop seam: the last frame flows into the first
 
 Fix and re-render at most 2 times. Anything still wrong gets flagged in `index.md`.
 
@@ -164,6 +182,17 @@ Reply to the user with:
 - anything flagged
 
 Keep it short.
+
+## Style keys
+What `spec.style` can change (defaults in `clipper/style_defaults.json`; only include what differs). Colours are `#RRGGBB`; sizes are px on the 1080x1920 frame.
+- `hook`: `text` (show hook_text), `seconds` (on screen, default 3.5), `font`, `size` (62), `color` (#4CFF4C), `glow`, `box` + `boxOpacity` (0–100; 0 = no box), `position` (top | middle | bottom), `animation` (type | fade | none), `coldOpen` (auto | always | off), `coldOpenSeconds` (3), `flash` (white flash on the cut out of the cold open), `loop` (true), `voice` (allow voice_hook), `voicePreset` (a VoiceStudio voice: narrator, casual, news_anchor, storyteller, energetic, gravelly_villain, aussie_podcaster, bedtime_storyteller, or a description like "young adult male, low pitch"), `voiceVolume` (1.0)
+- `captions`: `enabled`, `font` (Arial Black; any installed font, e.g. Impact, Bahnschrift), `size` (70), `color` (#FFFFFF), `outline`, `outlineWidth` (3), `shadow` (4), `highlight` (#4CFF4C), `highlightMode` (keywords: your `emphasis` words | active: the word being spoken | off), `position` (% of the height from the bottom, 42), `uppercase`, `wordsPerCaption` (1–3), `reveal` (words appear as spoken)
+- `music`: `enabled`, `volume` (0.4: vs the voice in pauses; it ducks under speech), `duck`
+- `zoom`: `enabled`, `scale` (1.15), `auto` (punch in at the cold open's start)
+- `sfx`: `enabled`, `volume` (0.8), `autoCuts` (whoosh on cuts, riser into the payoff)
+- `framing`: `track` (follow the face in `track` layouts)
+
+Plain words to keys, for example: "yellow captions" → `captions.highlight: "#FFE14D"` (or `color` for all words); "bigger captions" → `captions.size: 84`; "2 words at a time" → `captions.wordsPerCaption: 2`; "no music" → `music.enabled: false`; "quieter music" → `music.volume: 0.25`; "no zooms" → `zoom.enabled: false`; "boxed hook at the top" → `hook.position: "top", hook.boxOpacity: 70`; "deep voice" → `hook.voicePreset: "gravelly_villain"`; "no cold open" → `hook.coldOpen: "off"`.
 
 ## Posting to YouTube (only when the user asks)
 Not part of the automatic run: publishing is outward-facing, so it waits for the user to ask.
@@ -182,7 +211,7 @@ Sources added in the StreamVault desktop app (`app/`, engine `clipper/run_queue.
 The YouTube Data API isn't used: uploads from an unaudited API project are locked to private.
 
 ## Notes
-- Background music only ever comes from the user's `music/` folder: tracks they own or royalty-free ones (e.g. the YouTube Audio Library). Never download or add songs yourself: a copyrighted song gets a Content ID claim.
 - Only clip content the user owns or has permission to clip (their own channel, or a creator's clipping program). If a URL is clearly someone else's content and the user hasn't said they have permission, mention it once in the final report; don't refuse.
+- Background music comes from the user's `music/` folder (their own cleared tracks, or ones generated with their ElevenLabs account), sound effects from `sfx/`. Both have a `library.json` recording each file's source. Never download or add songs yourself: a copyrighted song gets a Content ID claim.
 - `shorts/<slug>/*.json` metadata feeds `export_posts.py` and `plan_posts.py`. Keep its fields stable. `"flagged": "<reason>"` holds a Short back from the queue.
 - Folder input: everything in `inbox/` (or the given folder) is processed. Sources that already have `shorts/<slug>/index.md` are skipped unless the user asks to redo them.

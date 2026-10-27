@@ -122,7 +122,7 @@
     <section class="tab" id="tab-style">
       <header>
         <h1>Style</h1>
-        <p>How Shorts are picked and how they look. Changes save on their own to <code>style.json</code> in the workspace and apply to the next video and the next render; the engine doesn't restart.</p>
+        <p>Which moments become Shorts, and how they should look, in your own words. Claude reads the instructions for every video and decides the hook, cold open, captions, music, zooms, sound effects and voice for each clip. Changes save on their own and apply to the next video.</p>
       </header>
       <div class="style-grid">
         <div class="style-form" id="style-form">
@@ -138,86 +138,37 @@
           </div>
 
           <div class="card">
-            <h2>Hook</h2>
-            <label class="check"><input type="checkbox" data-k="hook.text"> Text banner over the first seconds (Claude writes it for each clip)</label>
-            <div class="row wrap">
-              <label class="field">On screen for <small>seconds</small><input data-k="hook.seconds" type="number" min="0.5" max="10" step="0.5"></label>
-              <label class="field">Font<input data-k="hook.font" list="sy-fonts" spellcheck="false"></label>
-              <label class="field">Size <small>px</small><input data-k="hook.size" type="number" min="20" max="200"></label>
-              <label class="field">Text<input data-k="hook.color" type="color"></label>
-              <label class="field">Position<select data-k="hook.position"><option value="top">Top</option><option value="middle">Middle</option><option value="bottom">Bottom</option></select></label>
-              <label class="field">Animation<select data-k="hook.animation"><option value="type">Typed on</option><option value="fade">Fade</option><option value="none">None</option></select></label>
-            </div>
-            <div class="row wrap">
-              <label class="check"><input type="checkbox" data-k="hook.glow"> Glow</label>
-              <label class="field">Box<input data-k="hook.box" type="color"></label>
-              <label class="field">Box opacity <small id="sy-boxop"></small><input data-k="hook.boxOpacity" type="range" min="0" max="100" step="5"></label>
-            </div>
-            <div class="row wrap">
-              <label class="field">Cold open <small>the payoff, played first</small><select data-k="hook.coldOpen"><option value="auto">When there's a clear payoff</option><option value="always">Always</option><option value="off">Off</option></select></label>
-              <label class="field">Cold open length <small>seconds</small><input data-k="hook.coldOpenSeconds" type="number" min="0.5" max="5" step="0.5"></label>
-              <label class="check"><input type="checkbox" data-k="hook.flash"> Flash on the cut into the clip</label>
-            </div>
-          </div>
-
-          <div class="card">
-            <h2>Music</h2>
-            <div class="row wrap">
-              <label class="check"><input type="checkbox" data-k="music.enabled"> Background music under the voice</label>
-              <label class="check"><input type="checkbox" data-k="music.duck"> Duck under speech</label>
-              <label class="field">Volume <small id="sy-vol"></small><input data-k="music.volume" type="range" min="0" max="1" step="0.05"></label>
-              <span class="grow"></span>
-              <button class="ghost sm" id="sy-music">Open music folder</button>
-            </div>
-            <p class="hint" id="sy-music-status"></p>
-            <p class="hint">Put tracks in <code>music\funny</code>, <code>hype</code>, <code>romantic</code> or <code>chill</code> (or straight in <code>music</code>); Claude picks the mood for each clip. Only use tracks you own or royalty-free ones, such as the YouTube Audio Library: a copyrighted song gets a Content ID claim.</p>
-          </div>
-
-          <div class="card">
-            <h2>Captions</h2>
-            <div class="row wrap">
-              <label class="check"><input type="checkbox" data-k="captions.enabled"> Captions</label>
-              <label class="check"><input type="checkbox" data-k="captions.uppercase"> UPPERCASE</label>
-              <label class="check"><input type="checkbox" data-k="captions.reveal"> Words appear as they're spoken</label>
-            </div>
-            <div class="row wrap">
-              <label class="field">Font<input data-k="captions.font" list="sy-fonts" spellcheck="false"></label>
-              <label class="field">Size <small>px</small><input data-k="captions.size" type="number" min="20" max="200"></label>
-              <label class="field">Words per caption<select data-k="captions.wordsPerCaption"><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label>
-            </div>
-            <div class="row wrap">
-              <label class="field">Text<input data-k="captions.color" type="color"></label>
-              <label class="field">Outline<input data-k="captions.outline" type="color"></label>
-              <label class="field">Outline width<input data-k="captions.outlineWidth" type="number" min="0" max="20"></label>
-              <label class="field">Shadow<input data-k="captions.shadow" type="number" min="0" max="20"></label>
-              <label class="field">Highlight<input data-k="captions.highlight" type="color"></label>
-              <label class="field">Highlight on<select data-k="captions.highlightMode"><option value="keywords">Key words (Claude picks)</option><option value="active">The word being spoken</option><option value="off">Off</option></select></label>
-            </div>
-            <label class="field">Height <small id="sy-pos"></small><input data-k="captions.position" type="range" min="5" max="95" step="1"></label>
-          </div>
-
-          <div class="card">
             <h2>Instructions for Claude</h2>
-            <textarea data-k="instructions" rows="4" placeholder="e.g. yellow captions on funny clips, sarcastic hooks, never clip the sponsor segment"></textarea>
-            <p class="hint">Plain words; they go into every video's prompt. Look changes per clip (colours, sizes) are applied by the renderer.</p>
+            <textarea data-k="instructions" rows="9" placeholder="Describe the look and the picks, e.g.&#10;Neon green hook text, sarcastic tone. Phonk on hype clips, lo-fi on sweet ones.&#10;Zoom in on every reaction and add a bass boom on the punchline.&#10;Voice hook in a deep narrator voice, only on funny clips.&#10;Yellow captions, 2 words at a time. Never clip sponsor reads."></textarea>
+            <p class="hint">Without instructions, Shorts get the default look: a cold open of the payoff, a green typed-on hook, white captions with a coloured key word, a ducked beat, punch-in zooms, whooshes on cuts and a looping ending. Claude follows the subject's face and checks every clip's frames.</p>
+            <div class="chips examples" id="sy-examples"></div>
+          </div>
+
+          <div class="card">
+            <div class="row"><h2>Sound library</h2><span class="grow"></span>
+              <button class="ghost sm" id="sy-music">Open music folder</button>
+              <button class="ghost sm" id="sy-sfx">Open sound effects folder</button></div>
+            <p class="hint" id="sy-library"></p>
+            <label class="field">Add music from links <small>YouTube, YouTube Music or reels whose music you're cleared to use; one per line</small>
+              <textarea id="sy-links" rows="3" placeholder="https://www.youtube.com/watch?v=…"></textarea></label>
+            <div class="row">
+              <label class="field">Mood<select id="sy-mood"><option value="">Guess from the music</option><option value="hype">hype</option><option value="funny">funny</option><option value="romantic">romantic</option><option value="chill">chill</option></select></label>
+              <span class="grow"></span>
+              <button class="primary sm" id="sy-import">Import music</button>
+            </div>
+            <pre class="log" id="sy-import-log" hidden></pre>
+            <p class="hint">Each track's source link is kept in <code>music\library.json</code>: your proof if a Short gets a copyright claim. Content ID can claim a track even when you're licensed to use it, so keep that file. ElevenLabs music and sound effects come from Setup → ElevenLabs.</p>
           </div>
           <div class="row">
-            <button class="ghost sm" id="sy-reset">Reset to defaults</button>
             <span class="grow"></span>
             <span class="hint" id="sy-saved"></span>
           </div>
         </div>
 
         <aside class="style-side">
-          <div class="mock" id="sy-mock">
-            <video id="sy-bg" muted loop playsinline></video>
-            <div class="mock-flash" id="sy-flash"></div>
-            <div class="mock-hook" id="sy-hook"></div>
-            <div class="mock-cap" id="sy-cap"></div>
-          </div>
-          <p class="hint center">Live preview with sample text</p>
           <div class="card">
             <h2>Preview on a real clip</h2>
+            <p class="hint">Claude applies the current instructions to a past Short, then renders a quick draft. About a minute.</p>
             <select id="sy-short"></select>
             <div class="row">
               <span class="hint" id="sy-preview-msg"></span>
@@ -225,10 +176,10 @@
               <button class="primary sm" id="sy-preview">Render preview</button>
             </div>
             <video id="sy-result" controls></video>
+            <pre class="log" id="sy-plan" hidden></pre>
           </div>
         </aside>
       </div>
-      <datalist id="sy-fonts"></datalist>
     </section>
 
     <!-- Settings -->

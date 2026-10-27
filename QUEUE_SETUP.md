@@ -37,7 +37,7 @@ The app opens on **Setup** until every required step is green. Each step checks 
 |---|---|---|---|
 | 1 | **Workspace folder** | Pick a drive with space (default `C:\StreamVault`) and click **Copy scripts**. | Copies `clipper/`, `uploader/`, the shorts-clipper skill and the patched `video-use` there. After each app update it refreshes them, and never touches `sources/`, `shorts/`, `inbox/` or `outbox/`. |
 | 2 | **Tools** | Click **Install** on anything missing. | Runs the official installer: winget for uv, ffmpeg, Node.js and Chrome; `uv tool install` for yt-dlp; Claude's and VoiceStudio's own scripts. It then re-reads PATH, so no restart is needed. |
-| 3 | **Python environment** | Click **Set up Python environment**. | Runs `uv sync` in `video-use` and links the video-use skill for Claude Code. A junction you made by hand to the same folder is kept. |
+| 3 | **Python environment** | Click **Set up Python environment**. | Runs `uv sync` in `video-use`, installs OpenCV for face tracking, and links the video-use skill for Claude Code. A junction you made by hand to the same folder is kept. |
 | 4 | **Claude sign-in** | Click **Sign in to Claude**, finish in the browser, then Re-check. | Runs `claude auth login` in its own window. |
 | 5 | **VoiceStudio model** | In VoiceStudio, pick **WhisperX (large-v3)** on **CUDA**. Click **Allow 1-hour files**, restart VoiceStudio, then click **Test transcription**. | Sets `OMNIVOICE_ASR_TRANSCRIBE_TIMEOUT_S=3600` and sends 2 s of audio through the transcription endpoint. |
 | 6 | **n8n server** | Enter your n8n address and an API key (n8n → Settings → n8n API → Create an API key). | Tests the API and shows the OAuth redirect URL, which you need for steps 7 and 10. |
@@ -46,9 +46,10 @@ The app opens on **Setup** until every required step is green. Each step checks 
 | 9 | **YouTube sign-in** | **1. Open Chrome**, sign in to YouTube Studio as the channel, then **2. Save YouTube session**. | Reads the youtube.com/google.com cookies from that Chrome window and stores them as the repo secret `YT_SESSION`. It also stores the token as `SECRETS_PAT`, so each run keeps the session fresh. |
 | 10 | **YouTube API** (optional) | Only after Google approves your API audit: a Google OAuth client (Web, the redirect URL from step 6, consent screen *In production*). | Adds the API path to the workflow. |
 | 11 | **n8n posting workflow** | Choose how often and the time zone, then **Create workflow in n8n**. Click **Connect OneDrive in n8n** (and YouTube, if set) and sign in there once. Then **Activate**. | Creates the credentials and the "StreamVault: post Shorts" workflow from the built-in template (your folder, repo, schedule). **Update** re-sends it after you change something. Shows recent runs. |
+| 12 | **ElevenLabs** (optional) | Create an ElevenLabs API key (Sound Effects, Music, User read), save it, then **Make both**. | Checks the key and your credits, then generates the sound library into `sfx\` and `music\` with `clipper/sound_library.py`. The key is only passed to that script. |
 
 Notes:
-- **Secrets** (n8n API key, Azure secret, GitHub token, Google secret, the OneDrive sign-in) are encrypted with Windows' DPAPI in the app's data folder. They're never shown again in full.
+- **Secrets** (n8n API key, Azure secret, GitHub token, Google secret, ElevenLabs key, the OneDrive sign-in) are encrypted with Windows' DPAPI in the app's data folder. They're never shown again in full.
 - **Step 8 needs the uploader workflow on `main`:** `.github/workflows/youtube-upload.yml` must be on the repo's default branch. The check tells you if it isn't, which means this branch hasn't been merged yet.
 - **Why n8n's OAuth sign-ins aren't automatic:** they're browser sign-ins that only n8n's own page can run. That's why step 11 opens it for you.
 
@@ -72,21 +73,31 @@ Notes:
 - **Closing the window** keeps the app running in the tray. Quit from the tray menu.
 
 ## Style
-The **Style** tab sets which moments become Shorts and how they look. It saves to `<workspace>\style.json` as you change things. The engine reads that file fresh for every video and every render, so nothing restarts. Workspace updates never touch `style.json`, `music\` or `fonts\`.
+The **Style** tab sets which moments become Shorts, and how they should look, in your own words. It saves to `<workspace>\style.json` as you type. The engine reads that file fresh for every video, so nothing restarts. Workspace updates never touch `style.json`, `music\`, `sfx\` or `fonts\`.
 
-| Card | What it sets |
+| Card | What it does |
 |---|---|
 | **Quality & length** | Minimum score (default **9**/10), max Shorts per video (**3**), and length (**20–45 s**, cold open included). Quality over quantity: a weak video can make zero Shorts, and that's correct. |
-| **Hook** | The text banner Claude writes for each clip (≤ 8 words of curiosity, not the punchline): font, size, colour, glow or box, position, typed-on/fade, and how long it stays. The **cold open** plays the payoff first, under the banner, then the clip starts from the top. *When there's a clear payoff* lets Claude decide per clip. |
-| **Music** | A track under the voice, ducked while people talk, at the set volume. **Open music folder** makes `music\funny`, `hype`, `romantic` and `chill`. Claude picks the mood, and the renderer rotates through the tracks in that folder (or in `music\` itself). No tracks means no music. |
-| **Captions** | Font (any installed font; a font file dropped in `<workspace>\fonts\` works too), size, text/outline/highlight colours, shadow, height, UPPERCASE, words per caption, words appearing as they're spoken, and the highlight: the word being spoken, key words Claude picks, or off. |
-| **Instructions for Claude** | Plain words for every video, e.g. "yellow captions on funny clips, sarcastic hooks". Look changes Claude makes for one clip go into that clip's spec. |
+| **Instructions for Claude** | Everything about the look, in plain words: hook text and tone, captions (colour, size, words at a time), music mood, zooms, sound effects, the voice hook, cold opens. For example "Yellow captions, 2 words at a time. Phonk on hype clips. Voice hook in a deep voice on funny clips only." The chips under the box add common ones. Per-video instructions go in the Add tab. |
+| **Sound library** | How many music tracks (per mood) and sound effects (per category) you have. **Open music folder** / **Open sound effects folder**. **Add music from links**: paste YouTube, YouTube Music or reel links whose music you're cleared to use; each is downloaded, checked, sorted into `music\funny`, `hype`, `romantic` or `chill` (or the mood you pick), and its quiet intro trimmed. A track with people talking over it goes to `music\_review\` instead: share the song's own link. |
+| **Preview on a real clip** | Claude applies the current instructions to a past Short (it shows what it chose), then renders a quick draft and opens it. The real Short isn't changed. It needs that video's download, so it doesn't work after **Delete each downloaded video** has removed it. |
 
-The phone on the right previews the look live with sample text. **Preview on a real clip** re-renders a past Short as a quick draft with the current settings (saved or not) and opens it; the real Short isn't changed. It needs that video's download, so it doesn't work after **Delete each downloaded video** has removed it.
+**What every Short gets unless your instructions say otherwise** (the defaults copy a popular clip-channel look):
+- **Cold open:** ~3 s of the payoff first, with a white flash into the clip.
+- **Hook:** a neon-green line typed on mid-screen, and optionally spoken by a stock VoiceStudio voice when it fits. The voice hook needs VoiceStudio running.
+- **Captions:** heavy white captions with a coloured key word.
+- **Zooms and sound effects:** a punch-in zoom on the payoff, whooshes on cuts, and a riser into the payoff.
+- **Music:** a beat that dips under speech.
+- **Loop ending:** the end leads back into the start, with no "follow for more".
 
-The defaults copy a popular clip-channel look: a ~3 s cold open of the payoff with a neon-green hook line typed on mid-screen, then heavy white captions with a coloured key word, over a beat that dips under speech.
+**Claude watches the clips:**
+- It looks at a filmstrip of each promising moment before scoring it: is there a visible reaction, and is the person on screen?
+- **Face tracking** (OpenCV, installed by Setup → Python environment) follows the speaker so they stay in the 9:16 frame. A Short whose subject is out of frame for more than 20% of the time is re-framed or switched to a blurred-background layout.
+- After rendering, Claude reads a review sheet per Short (first look, hook, both sides of each cut, payoff, loop seam) and fixes what's off.
 
-**Music licensing:** only put tracks in `music\` that you own or that are royalty-free for YouTube, such as the YouTube Audio Library (YouTube Studio → Audio Library) (check whether a track needs attribution, and add it to the description). A copyrighted song gets a Content ID claim: the Short earns nothing, can be blocked in some countries, and repeated claims hurt the channel.
+**Where the sounds come from:**
+- **ElevenLabs** (Setup → ElevenLabs): with your API key, **Make both** generates about 23 sound effects and 20 one-minute music tracks in 4 moods. Running it again only fills gaps. ElevenLabs only clears its generated sounds for monetized YouTube on a paid plan.
+- **Your links** (Style → Sound library): only music you're cleared to use. Every track's source link is saved in `music\library.json`, and every effect's origin in `sfx\library.json`. That's your proof if a Short gets a claim. Content ID matches the audio itself, so even licensed tracks can be claimed; a copyrighted song gets a claim: the Short earns nothing, can be blocked in some countries, and repeated claims hurt the channel.
 
 ## The Studio uploader (until the API audit clears)
 n8n picks the Short and starts the GitHub Actions workflow `youtube-upload.yml`. That run uploads through YouTube Studio with Playwright (`uploader/studio_upload.py`) and reports back, and n8n then moves the Short to `posted/`.

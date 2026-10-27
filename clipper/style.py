@@ -1,8 +1,9 @@
-"""The Short "style": selection rules, hook, music and captions, shared by the engine and the renderer.
+"""The Short "style": selection rules and the look, shared by the engine and the renderer.
 
-The app writes <workspace>/style.json from its Style tab. Nothing caches it: run_queue.py reads it
-for every video (the selection rules and instructions go into Claude's prompt) and render_short.py
-for every render. A clip spec can override any of it in its own "style" block, so the order is
+The user only sets the selection rules (`clip`) and plain-language `instructions` in the app's Style
+tab, saved to <workspace>/style.json. Everything about the look is Claude's call per clip: it reads
+the instructions and writes the clip spec's "style" block (plus hook_text, zooms, sfx, voice_hook...).
+run_queue.py reads style.json for every video and render_short.py for every render; the order is
 
     DEFAULTS  <  style.json (or render_short.py --style FILE)  <  spec["style"]
 
@@ -23,6 +24,13 @@ Keys (defaults in style_defaults.json):
               highlightMode active (the spoken word)|keywords (spec.emphasis)|off,
               position (% of the height, from the bottom), uppercase, wordsPerCaption 1-3,
               reveal (words appear as they are spoken)
+    hook (more) loop (end flows back into the start: short music fade, no last-moment caption),
+              voice (spec.voice_hook may be spoken), voicePreset (a VoiceStudio personality id such as
+              narrator, casual, energetic, gravelly_villain, or a description like "young adult, low
+              pitch"), voiceVolume
+    zoom      enabled, scale (punch-in size), auto (punch in at the cold open's start)
+    sfx       enabled, folder, volume, autoCuts (whoosh on cuts, riser into the payoff)
+    framing   track (follow the subject's face in `track` layouts; check coverage)
     instructions  free text for Claude
 """
 
@@ -33,7 +41,7 @@ import json
 import re
 from pathlib import Path
 
-# The defaults live in style_defaults.json so the app's Style tab shows the same values.
+# The defaults live in style_defaults.json, which the app reads too.
 DEFAULTS: dict = json.loads((Path(__file__).with_name("style_defaults.json")).read_text(encoding="utf-8"))
 
 MOODS = ("funny", "hype", "romantic", "chill")
@@ -49,7 +57,9 @@ RANGES = {
     ("clip", "minSeconds"): (5, 180), ("clip", "maxSeconds"): (5, 180),
     ("hook", "seconds"): (0.5, 10), ("hook", "size"): (20, 200), ("hook", "boxOpacity"): (0, 100),
     ("hook", "coldOpenSeconds"): (0.5, 5),
+    ("hook", "voiceVolume"): (0, 2),
     ("music", "volume"): (0, 1),
+    ("zoom", "scale"): (1.0, 1.6), ("sfx", "volume"): (0, 2),
     ("captions", "size"): (20, 200), ("captions", "outlineWidth"): (0, 20), ("captions", "shadow"): (0, 20),
     ("captions", "position"): (5, 95), ("captions", "wordsPerCaption"): (1, 3),
 }
@@ -138,23 +148,14 @@ def ass_color(hex_rgb: str, opacity: float = 100) -> str:
 
 
 def settings_line(style: dict, instructions: str = "") -> str:
-    """The user's settings, in plain words, for the headless Claude prompt."""
-    c, h, m = style["clip"], style["hook"], style["music"]
-    parts = [
-        f"minimum score {c['minScore']:g}",
-        f"at most {c['maxShorts']} Shorts",
-        f"clip length {c['minSeconds']:g}-{c['maxSeconds']:g} s",
-        f"hook text banner {'on: write hook_text' if h['text'] else 'off: no hook_text'}",
-        {"auto": f"cold open when a clear payoff exists (cold_open about {h['coldOpenSeconds']:g} s)",
-         "always": f"cold open on every clip (cold_open about {h['coldOpenSeconds']:g} s)",
-         "off": "no cold open"}[h["coldOpen"]],
-        "background music on: pick music_mood" if m["enabled"] else "no background music",
-    ]
-    if style["captions"]["highlightMode"] == "keywords":
-        parts.append("caption highlight on keywords: list emphasis words")
-    line = f" User settings for this run: {', '.join(parts)}."
+    """The user's selection rules and instructions, in plain words, for the headless Claude prompt."""
+    c = style["clip"]
+    line = (f" User settings for this run: minimum score {c['minScore']:g}, at most {c['maxShorts']} Shorts,"
+            f" clip length {c['minSeconds']:g}-{c['maxSeconds']:g} s."
+            " You decide the look of every clip (hook text, cold open, music mood, captions through"
+            " spec.style, zooms, sound effects, voice hook, loop ending) following the user's instructions;"
+            " where they say nothing, use the skill's defaults.")
     notes = [t.strip() for t in (style.get("instructions") or "", instructions or "") if t and t.strip()]
     if notes:
-        line += (" The user's instructions (follow them; put per-clip look changes in the spec's"
-                 " \"style\" block): " + " / ".join(f"\"{n}\"" for n in notes) + ".")
+        line += " The user's instructions: " + " / ".join(f"\"{n}\"" for n in notes) + "."
     return line

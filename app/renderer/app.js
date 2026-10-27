@@ -403,13 +403,20 @@ const errText = e => String(e && e.message || e).replace(/^Error invoking remote
 
 // ------------------------------------------------------------------ Style tab
 
-// style.json, edited in place: every [data-k="section.key"] control maps to one value.
+// style.json holds the four Quality & length numbers and the instructions; the look is Claude's call.
 let style = null;
 let styleDefaults = {};
 let styleSaveTimer;
-const STYLE_SAMPLE = { hook: 'She swore she watches him every night', words: ['You', 'never', 'watch', 'me'], keyword: 1 };
-const MOCK_H = 480;                    // px; the real frame is 1920 tall
-const px = v => `${(v * MOCK_H) / 1920}px`;
+const STYLE_EXAMPLES = [
+  'Neon green hook text, sarcastic tone',
+  'Phonk on hype clips, lo-fi on sweet ones',
+  'Zoom in on every reaction',
+  'Bass boom on the punchline',
+  'Voice hook in a deep narrator voice, only on funny clips',
+  'Yellow captions, 2 words at a time',
+  'No cold open',
+  'Never clip sponsor reads',
+];
 
 const getPath = (obj, k) => k.split('.').reduce((o, p) => (o == null ? o : o[p]), obj);
 function setPath(obj, k, v) {
@@ -420,120 +427,36 @@ function setPath(obj, k, v) {
 }
 
 function fillStyle() {
-  document.querySelectorAll('#style-form [data-k]').forEach(x => {
-    const v = getPath(style, x.dataset.k);
-    if (x.type === 'checkbox') x.checked = !!v;
-    else x.value = v ?? '';
-  });
-  drawMock();
+  document.querySelectorAll('#style-form [data-k]').forEach(x => { x.value = getPath(style, x.dataset.k) ?? ''; });
 }
 
 function readStyle() {
   const next = structuredClone(style);
   document.querySelectorAll('#style-form [data-k]').forEach(x => {
-    const def = getPath(styleDefaults, x.dataset.k);
-    let v = x.type === 'checkbox' ? x.checked : x.value;
-    if (typeof def === 'number') v = Number(v);
-    setPath(next, x.dataset.k, v);
+    setPath(next, x.dataset.k, typeof getPath(styleDefaults, x.dataset.k) === 'number' ? Number(x.value) : x.value);
   });
   return next;
 }
 
 function onStyleInput() {
   style = readStyle();
-  drawMock();
   clearTimeout(styleSaveTimer);
   styleSaveTimer = setTimeout(async () => {
     try {
       await sv.setStyle(style);
-      $('#sy-saved').textContent = 'Saved to style.json';
+      $('#sy-saved').textContent = 'Saved';
     } catch (e) { toast(errText(e), 'bad'); }
-  }, 400);
+  }, 500);
 }
 
-const rgba = (hex, opacity) => {
-  const n = parseInt(String(hex).slice(1), 16);
-  return `rgba(${n >> 16}, ${(n >> 8) & 255}, ${n & 255}, ${opacity})`;
-};
-const heavy = font => /black|heavy|impact/i.test(font);
-
-// A CSS approximation of what libass draws: same sizes (scaled), colours, positions and effects.
-function drawMock() {
-  if (!style) return;
-  const h = style.hook, c = style.captions;
-  $('#sy-boxop').textContent = `${h.boxOpacity}%`;
-  $('#sy-vol').textContent = `${Math.round(style.music.volume * 100)}%`;
-  $('#sy-pos').textContent = `${c.position}% from the bottom`;
-
-  const hook = $('#sy-hook');
-  Object.assign(hook.style, {
-    fontFamily: `"${h.font}", "Arial Black", sans-serif`, fontWeight: heavy(h.font) ? 400 : 700,
-    fontSize: px(h.size), color: h.color, top: '', bottom: '',
-    background: h.boxOpacity > 0 ? rgba(h.box, h.boxOpacity / 100) : 'none',
-    padding: h.boxOpacity > 0 ? px(18) : '0',
-    textShadow: h.boxOpacity > 0 ? 'none' : [h.glow ? `0 0 ${px(h.size / 4)} ${h.color}` : '',
-      `${px(4)} ${px(4)} 0 rgba(0,0,0,.4)`, `0 0 ${px(2)} #101010`].filter(Boolean).join(', '),
-    textTransform: c.uppercase ? 'uppercase' : 'none',
-  });
-  if (h.position === 'top') hook.style.top = px(330);
-  else hook.style.bottom = h.position === 'bottom' ? '30%' : `${c.position}%`;
-
-  const cap = $('#sy-cap');
-  const ow = c.outlineWidth;
-  Object.assign(cap.style, {
-    fontFamily: `"${c.font}", "Arial Black", sans-serif`, fontWeight: heavy(c.font) ? 400 : 700,
-    fontSize: px(c.size), color: c.color, bottom: `${c.position}%`,
-    textTransform: c.uppercase ? 'uppercase' : 'none',
-    textShadow: [
-      ...(ow ? [[-1, -1], [1, -1], [-1, 1], [1, 1], [0, 1.4], [0, -1.4], [1.4, 0], [-1.4, 0]]
-        .map(([x, y]) => `${px(x * ow)} ${px(y * ow)} 0 ${c.outline}`) : []),
-      c.shadow ? `${px(c.shadow)} ${px(c.shadow)} 0 rgba(0,0,0,.5)` : '',
-    ].filter(Boolean).join(', ') || 'none',
-  });
-  cap.style.display = c.enabled ? '' : 'none';
-  restartMockLoop();
-}
-
-// Loops the sample: hook (typed, faded or plain) for hook.seconds, a flash for a cold open, then captions.
-let mockTimer = null;
-function restartMockLoop() {
-  clearTimeout(mockTimer);
-  const h = style.hook, c = style.captions;
-  const hookOn = h.text;
-  const hidesCaps = hookOn && h.position === 'middle';
-  const words = STYLE_SAMPLE.words.slice(0, c.wordsPerCaption);
-  const start = performance.now();
-  const hookMs = hookOn ? h.seconds * 1000 : 0;
-  const wordMs = 380;
-  const total = hookMs + words.length * wordMs + 1600;
-  const tick = () => {
-    const t = (performance.now() - start) % total;
-    const hook = $('#sy-hook');
-    const text = STYLE_SAMPLE.hook;
-    if (hookOn && t < hookMs) {
-      const typed = h.animation === 'type' ? Math.ceil(text.length * Math.min(1, t / Math.min(1200, hookMs * 0.4))) : text.length;
-      hook.replaceChildren(el('span', {}, text.slice(0, typed)), el('span', { class: 'ghosted' }, text.slice(typed)));
-      hook.style.opacity = h.animation === 'none' ? 1 : Math.min(1, (hookMs - t) / 250, h.animation === 'fade' ? t / 200 : 1);
-    } else {
-      hook.replaceChildren();
-    }
-    const cut = h.coldOpenSeconds * 1000;   // where a cold open would cut into the clip
-    $('#sy-flash').style.opacity = h.coldOpen !== 'off' && h.flash && t >= cut && t < cut + 200 ? 0.8 * (1 - (t - cut) / 200) : 0;
-    const capT = t - (hidesCaps ? hookMs : 0);
-    const active = Math.min(words.length - 1, Math.floor(Math.max(0, capT) / wordMs));
-    const cap = $('#sy-cap');
-    cap.replaceChildren(...words.map((w, i) => {
-      const lit = (c.highlightMode === 'active' && i === active) || (c.highlightMode === 'keywords' && i === STYLE_SAMPLE.keyword);
-      const hidden = c.reveal && i > active;
-      const span = el('span', {}, `${w} `);   // styled through the DOM: the page's CSP blocks style attributes
-      span.style.color = lit ? c.highlight : c.color;
-      span.style.opacity = hidden ? 0 : 1;
-      return span;
-    }));
-    cap.style.visibility = capT < 0 ? 'hidden' : 'visible';
-    mockTimer = setTimeout(tick, 50);
-  };
-  tick();
+function showLibrary(m) {
+  const list = counts => Object.entries(counts).filter(([, n]) => n).map(([k, n]) => `${k} ${n}`).join(', ');
+  const music = list(m.moods);
+  const sfx = list(m.sfx);
+  $('#sy-library').textContent = [
+    music ? `Music: ${music}.` : 'No music yet: Shorts render without music until you add some.',
+    sfx ? `Sound effects: ${sfx}.` : 'No sound effects yet.',
+  ].join(' ');
 }
 
 async function loadStyle() {
@@ -542,52 +465,54 @@ async function loadStyle() {
   styleDefaults = r.defaults;
   fillStyle();
   $('#sy-saved').textContent = r.exists ? '' : 'Using the defaults (not saved yet)';
-  sv.styleFonts().then(fonts => $('#sy-fonts').replaceChildren(...fonts.map(f => el('option', { value: f }))));
-  showMusicStatus(await sv.musicStatus());
+  $('#sy-examples').replaceChildren(...STYLE_EXAMPLES.map(t => el('button', { class: 'chip', type: 'button', onclick: () => {
+    const box = document.querySelector('#style-form [data-k="instructions"]');
+    box.value = box.value.trim() ? `${box.value.trim().replace(/[.]?$/, '.')} ${t}.` : `${t}.`;
+    onStyleInput();
+  } }, `+ ${t}`)));
+  showLibrary(await sv.musicStatus());
   const shorts = await sv.styleShorts();
   const pick = $('#sy-short');
-  pick.replaceChildren(...(shorts.length ? shorts.map(s => el('option', { value: s.id, disabled: !s.ok, 'data-video': s.videoUrl },
+  pick.replaceChildren(...(shorts.length ? shorts.map(s => el('option', { value: s.id, disabled: !s.ok },
     `${s.slug.slice(0, 28)} · ${s.title}${s.ok ? '' : ` (${s.why})`}`)) : [el('option', { value: '' }, 'No Shorts made yet')]));
   const first = shorts.find(s => s.ok);
   if (first) pick.value = first.id;
-  setMockVideo();
 }
 
-function showMusicStatus(m) {
-  const counts = Object.entries(m.moods).filter(([, n]) => n).map(([k, n]) => `${k === '(any)' ? 'any mood' : k}: ${n}`);
-  $('#sy-music-status').textContent = counts.length ? `Tracks: ${counts.join(', ')}` : 'No tracks yet: Shorts render without music until you add some.';
-}
-
-function setMockVideo() {
-  const opt = $('#sy-short').selectedOptions[0];
-  const bg = $('#sy-bg');
-  const url = opt && opt.dataset.video;
-  if (url && bg.dataset.src !== url) {
-    bg.dataset.src = url;
-    bg.src = url;
-    bg.currentTime = 5;
-    bg.play().catch(() => {});
+$('#style-form').addEventListener('input', e => { if (e.target.dataset.k) onStyleInput(); });
+$('#sy-music').addEventListener('click', async () => showLibrary(await sv.openMusic()));
+$('#sy-sfx').addEventListener('click', async () => showLibrary(await sv.openSfx()));
+$('#sy-import').addEventListener('click', async e => {
+  const links = $('#sy-links').value.trim();
+  if (!links) return toast('Paste one or more links first', 'bad');
+  const b = e.currentTarget;
+  b.disabled = true;
+  const log = $('#sy-import-log');
+  log.hidden = false;
+  log.textContent = 'Downloading and checking…';
+  try {
+    const r = await sv.importMusic(links, $('#sy-mood').value);
+    log.textContent = r.lines.join('\n') || 'Nothing imported';
+    if (r.ok) $('#sy-links').value = '';
+    showLibrary(r.library);
+  } catch (err) {
+    log.textContent = errText(err);
+  } finally {
+    b.disabled = false;
   }
-}
-
-$('#style-form').addEventListener('input', onStyleInput);
-$('#sy-reset').addEventListener('click', () => {
-  if (!confirm('Reset every style setting, including your instructions, to the defaults?')) return;
-  style = structuredClone(styleDefaults);
-  fillStyle();
-  onStyleInput();
 });
-$('#sy-music').addEventListener('click', async () => showMusicStatus(await sv.openMusic()));
-$('#sy-short').addEventListener('change', setMockVideo);
 $('#sy-preview').addEventListener('click', async e => {
   const id = $('#sy-short').value;
   if (!id) return toast('Pick a Short first', 'bad');
   const b = e.currentTarget;
   b.disabled = true;
-  $('#sy-preview-msg').textContent = 'Rendering a quick draft…';
+  $('#sy-preview-msg').textContent = 'Claude is applying your instructions…';
+  $('#sy-plan').hidden = true;
   try {
     const r = await sv.previewStyle(id, readStyle());
     $('#sy-preview-msg').textContent = r.report.replace(/^\[(OK |BAD)\]\s*/, '');
+    $('#sy-plan').textContent = `What Claude chose:\n${JSON.stringify(r.plan, null, 1)}`;
+    $('#sy-plan').hidden = false;
     const v = $('#sy-result');
     v.src = `${r.videoUrl}?t=${Date.now()}`;
     v.classList.add('show');
@@ -599,7 +524,9 @@ $('#sy-preview').addEventListener('click', async e => {
     b.disabled = false;
   }
 });
-sv.onStyleLog(line => { if (/^(extracting|concat|compositing|  loudnorm)/.test(line)) $('#sy-preview-msg').textContent = line.trim(); });
+sv.onStyleLog(line => {
+  if (/^(extracting|concat|compositing|  loudnorm|rendering)/.test(line)) $('#sy-preview-msg').textContent = line.trim();
+});
 $('#to-style').addEventListener('click', () => showTab('style'));
 
 // ------------------------------------------------------------------ OneDrive sign-in dialog
@@ -856,6 +783,23 @@ const STEPS = [
             el('td', { class: `st-${x.status === 'success' ? 'done' : x.status === 'error' ? 'failed' : 'queued'}` }, x.status)))) : null,
       ];
     } },
+  { id: 'elevenlabs', title: 'ElevenLabs (music and sound effects)', optional: true,
+    blurb: 'Makes original background music and sound effects (whooshes, booms, reactions) for your Shorts with your own ElevenLabs account. Generated sounds are only cleared for monetized YouTube on a paid ElevenLabs plan.',
+    body: st => [
+      el('ol', { class: 'steps' },
+        el('li', {}, 'In ', link('https://elevenlabs.io/app/settings/api-keys', 'ElevenLabs → API keys'), ', create a key with access to ',
+          el('b', {}, 'Sound Effects'), ', ', el('b', {}, 'Music'), ' and ', el('b', {}, 'User (read)'), '.'),
+        el('li', {}, 'Save it here, then make the library: about 23 sound effects and 20 one-minute tracks (4 moods). Files that already exist are skipped, so it is safe to run again.')),
+      el('div', { class: 'row wrap' },
+        input('st-el-key', 'API key', { secret: true, placeholder: secretsMasked.elevenlabsApiKey || 'sk_…' }),
+        el('span', { class: 'grow' }),
+        el('button', { class: 'ghost sm', onclick: () => save({ elevenlabsApiKey: val('st-el-key') }, 'elevenlabs') }, 'Save and check')),
+      st.set ? el('div', { class: 'row' }, el('span', { class: 'grow' }),
+        button('Make sound effects', 'elevenlabs.build', { values: { what: 'sfx' }, after: () => checkStep('elevenlabs') }),
+        button('Make music', 'elevenlabs.build', { values: { what: 'music' }, after: () => checkStep('elevenlabs') }),
+        button('Make both', 'elevenlabs.build', { primary: true, values: { what: 'all' }, after: () => checkStep('elevenlabs') })) : null,
+      el('p', { class: 'hint' }, 'Music from links you’re cleared to use goes in through Style → Sound library.'),
+    ] },
 ];
 
 function renderStep(step, i) {

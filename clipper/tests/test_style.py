@@ -83,10 +83,9 @@ def test_settings_line():
     line = styles.settings_line(st, "only the pizza part")
     assert "minimum score 9" in line and "at most 3 Shorts" in line and "20-45 s" in line
     assert '"sarcastic hooks" / "only the pizza part"' in line
-    off = styles.clean(styles.merge(styles.DEFAULTS, {"hook": {"coldOpen": "off", "text": False},
-                                                     "music": {"enabled": False}}))
-    line = styles.settings_line(off)
-    assert "no cold open" in line and "no background music" in line and "instructions" not in line
+    assert "You decide the look of every clip" in line                    # the look is Claude's call
+    line = styles.settings_line(styles.clean(styles.DEFAULTS))
+    assert "instructions:" not in line and "skill's defaults" in line
 
 
 # ---------------------------------------------------------------- ranges
@@ -201,20 +200,143 @@ def test_music_tracks_and_graph():
         picks = [rs.pick_track(tracks, out / f"{n:02d}_funny_x.mp4").name for n in (1, 2, 3, 4)]
         assert picks[0] == rs.pick_track(tracks, out / "01_funny_x.mp4").name   # deterministic
         assert len(set(picks[:3])) == 3 and picks[3] == picks[0]                  # rotates
-    graph = rs.music_filter(30.0, -12.5, True, 0.03)
-    assert "sidechaincompress=threshold=0.03000" in graph and "[mus][key]" in graph
+    music = {"gain_db": -12.5, "duck": True, "threshold": 0.03}
+    graph = rs.audio_graph(30.0, music)
+    assert "[1:a]" in graph and "[mus][vkey]sidechaincompress=threshold=0.03000" in graph
     assert "volume=-12.50dB" in graph and "afade=t=out:st=28.500:d=1.5" in graph
     assert graph.endswith("normalize=0[aout]")
-    flat = rs.music_filter(30.0, -12.5, False, 0.03)
-    assert "sidechaincompress" not in flat and "[voice][bed]amix" in flat
+    flat = rs.audio_graph(30.0, dict(music, duck=False))
+    assert "sidechaincompress" not in flat and "[clip][bed]amix" in flat
+    looped = rs.audio_graph(30.0, music, loop=True)
+    assert "afade=t=out:st=29.850:d=0.15" in looped                      # loop ending: no long fade
 
 
 def test_no_music_note():
     st = styles.resolve(styles.clean(styles.DEFAULTS), {"music": {"folder": "no-such-folder-here"}})
-    plan, note = rs.plan_music(Path("base.mp4"), st, "funny", Path("01_x.mp4"), 30)
+    plan, note = rs.plan_music(Path("base.mp4"), st, "funny", Path("01_x.mp4"))
     assert plan is None and note.startswith("no music")
     off = styles.resolve(st, {"music": {"enabled": False}})
-    assert rs.plan_music(Path("base.mp4"), off, "funny", Path("01_x.mp4"), 30) == (None, None)
+    assert rs.plan_music(Path("base.mp4"), off, "funny", Path("01_x.mp4")) == (None, None)
+
+
+# ---------------------------------------------------------------- tracking, zoom, sfx, voice
+
+def test_tracking_path_and_coverage():
+    import track
+    # The face walks from x=0.2 to x=0.7 over 4 s, then stays: the crop follows, inside the frame.
+    samples = [(i / 5, (min(0.7, 0.2 + i * 0.025) - 0.03, 0.3, 0.06, 0.1)) for i in range(40)]
+    keys = track.smooth_path(samples, 0.316)
+    assert keys[0][1] == 0.2 and abs(keys[-1][1] - 0.7) < 0.06
+    assert all(0.158 <= cx <= 0.842 for _, cx in keys)
+    speeds = [abs(b - a) / (t1 - t0) for (t0, a), (t1, b) in zip(keys, keys[1:]) if t1 > t0]
+    assert max(speeds) <= track.MAX_SPEED + 1e-6                         # never whips across the frame
+    tr = track.Track(samples=samples, keyframes=keys, crop_w=0.316)
+    assert track.coverage(tr, {"type": "track"}) > 0.9
+    assert track.coverage(tr, {"type": "center", "cx": 0.2}) < 0.5        # a fixed crop loses the subject
+    assert track.coverage(tr, {"type": "blur"}) == 1.0
+    assert abs(track.cx_at(keys, 0.0) - 0.2) < 1e-6
+    still = track.smooth_path([(i / 5, (0.48, 0.3, 0.06, 0.1)) for i in range(10)], 0.316)
+    assert len(still) == 2                                               # dead zone: no jitter keyframes
+
+
+def test_crop_and_zoom_expressions():
+    import track
+    x = track.x_expr([(0.0, 0.3), (2.0, 0.6)])
+    assert x.startswith("max(0,min(iw-ow,(") and "if(lt(t,2.000),0.3000+(0.15000)*(t-0.000),0.6000)" in x
+    assert rs.layout_filter({"type": "track"}, x).startswith(f"crop=w=ih*9/16:h=ih:x='{x}'")
+    assert "x='max(0,min(iw-ow,0.4*iw-ow/2))'" in rs.layout_filter({"type": "center", "cx": 0.4})
+    z = rs.zoom_filter([(1.0, 0.6, 1.2)], 0.3, "60/1")
+    assert z.startswith("zoompan=z='1+0.200*if(between(it,1.000,1.080)") and ":y='(ih-ih/zoom)*0.300'" in z
+    assert z.endswith("s=1080x1920:fps=60/1")
+    st = styles.clean(styles.DEFAULTS)
+    spec = {"zooms": [{"at": 12.0, "scale": 9}, {"at": 50}]}
+    assert rs.segment_zooms(spec, st, {"start": 10.0, "end": 20.0}, 1, 0.0) == [(2.0, 0.6, 1.6)]   # clamped
+    assert rs.segment_zooms({}, st, {"start": 30.0, "end": 33.0}, 0, 3.0) == [(0.0, 0.6, 1.15)]   # cold open
+    # Written as {start, end} (a common slip) it still works.
+    assert rs.segment_zooms({"zooms": [{"start": 12.0, "end": 13.6}]}, st, {"start": 10.0, "end": 20.0}, 1, 0.0) \
+        == [(2.0, 1.6, 1.15)]
+    off = styles.resolve(st, {"zoom": {"enabled": False}})
+    assert rs.segment_zooms(spec, off, {"start": 10.0, "end": 20.0}, 1, 0.0) == []
+
+
+def test_sfx_plan_and_graph():
+    ranges = [{"start": 30.0, "end": 33.0}, {"start": 10.0, "end": 20.0}, {"start": 25.0, "end": 35.0}]
+    assert rs.output_times(ranges, 31.0) == [1.0, 19.0]                  # the payoff plays twice
+    with tempfile.TemporaryDirectory() as d:
+        folder = Path(d) / "sfx"
+        for rel in ("transition/whoosh_1.mp3", "transition/riser_1.mp3", "impact/boom_1.mp3"):
+            (folder / rel).parent.mkdir(parents=True, exist_ok=True)
+            (folder / rel).write_bytes(b"x")
+        (folder / "library.json").write_text(json.dumps({"sounds": [
+            {"file": "transition/riser_1.mp3", "category": "transition", "tags": ["riser"], "hit_ms": 2500, "lufs": -16}]}))
+        lib = rs.sfx_library(folder)
+        assert {e["file"] for e in lib} == {"transition/whoosh_1.mp3", "transition/riser_1.mp3", "impact/boom_1.mp3"}
+        assert rs.resolve_sfx(lib, "impact/boom", 0)["file"] == "impact/boom_1.mp3"
+        assert rs.resolve_sfx(lib, "whoosh", 3)["file"] == "transition/whoosh_1.mp3"
+        assert rs.resolve_sfx(lib, "impact", 0)["file"] == "impact/boom_1.mp3"     # a category alone
+        assert rs.resolve_sfx(lib, "laugh", 0) is None
+        st = styles.resolve(styles.clean(styles.DEFAULTS), {"sfx": {"folder": str(folder), "volume": 1.0}})
+        spec = {"cold_open": {"start": 30.0, "end": 33.0}, "sfx": [{"at": 31.0, "sound": "impact/boom"},
+                                                                   {"at": 12.0, "sound": "crowd/laugh"}]}
+        plan, notes = rs.plan_sfx(spec, st, ranges, 3.0, Path("01_x.mp4"))
+        sounds = sorted((e["sound"], round(e["at"], 2)) for e in plan)
+        assert ("impact/boom_1.mp3", 1.0) in sounds and ("impact/boom_1.mp3", 19.0) in sounds
+        assert ("transition/whoosh_1.mp3", 3.0) in sounds                  # the cut out of the cold open
+        assert ("transition/whoosh_1.mp3", 13.0) in sounds                 # a jump cut, 10 s later
+        riser = next(e for e in plan if e["sound"] == "transition/riser_1.mp3")
+        assert round(riser["at"], 2) == 15.5 and round(riser["gain_db"], 2) == -7.0   # peak lands on the payoff, 18 s
+        assert notes == ["no sound effect for crowd/laugh"]
+        plan, _ = rs.plan_sfx({"sfx": [{"at": 12.0, "file": "impact/boom_1.mp3"}]},          # "file" for "sound"
+                              styles.resolve(st, {"sfx": {"autoCuts": False}}), ranges, 3.0, Path("01_x.mp4"))
+        assert [(e["sound"], round(e["at"], 2)) for e in plan] == [("impact/boom_1.mp3", 5.0)]
+    effects = [{"file": "w.mp3", "at": 3.0, "gain_db": -2.0}, {"file": "r.mp3", "at": -0.5, "gain_db": 0.0}]
+    g = rs.audio_graph(30.0, {"gain_db": -10, "duck": True, "threshold": 0.03}, {"file": "v.wav", "volume": 1.0}, effects)
+    assert "[2:a]" in g and "[3:a]" in g and "[4:a]" in g                  # music 1, narration 2, effects 3-4
+    assert "[clip][narkey]sidechaincompress" in g                         # the clip ducks under the narration
+    assert "[voice]asplit=2[vmix][vkey]" in g and "[mus][vkey]" in g        # music keys on voice only
+    assert "adelay=3000|3000,volume=-2.00dB[s0]" in g and "atrim=start=0.500" in g
+    assert "[vmix][s0][s1]amix=inputs=3" in g
+
+
+def test_voice_hook():
+    st = styles.clean(styles.DEFAULTS)
+    assert rs.voice_line({"voice_hook": True, "hook_text": "He had no idea"}, st) == "He had no idea"
+    assert rs.voice_line({"voice_hook": "  Wait for it  "}, st) == "Wait for it"
+    assert rs.voice_line({}, st) is None
+    assert rs.voice_line({"voice_hook": "x"}, styles.resolve(st, {"hook": {"voice": False}})) is None
+    import os
+    saved = os.environ.get("VOICESTUDIO_URL")
+    os.environ["VOICESTUDIO_URL"] = "http://127.0.0.1:9"                 # nothing listens there
+    rs._personalities = None
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            wav, note = rs.synth_voice("hello", st, Path(d))
+        assert wav is None and note.startswith("voice hook skipped")
+    finally:
+        rs._personalities = None
+        if saved is None:
+            os.environ.pop("VOICESTUDIO_URL", None)
+        else:
+            os.environ["VOICESTUDIO_URL"] = saved
+
+
+def test_captions_never_overlap():
+    # "I?" ends a cue early, then "YOU" starts 0.7 s later; a too-short cue stretched to 0.4 s must
+    # still end before the next one starts, or libass stacks the two on screen.
+    with tempfile.TemporaryDirectory() as d:
+        for reveal in (True, False):
+            ass = build(Path(d) / str(reveal), {}, {"hook": {"text": False}, "captions": {"reveal": reveal, "wordsPerCaption": 1,
+                                                                                    "highlightMode": "off"}})
+            spans = sorted((secs(e.split(",")[1]), secs(e.split(",")[2])) for e in events(ass))
+            assert all(b <= c + 1e-6 for (_, b), (c, _) in zip(spans, spans[1:]))
+
+
+def test_loop_ending_captions():
+    with tempfile.TemporaryDirectory() as d:
+        ass = build(Path(d), {}, {"hook": {"text": False, "loop": True}, "captions": {"reveal": False, "highlightMode": "off"}},
+                    ranges=[{"start": 10.0, "end": 12.7}])
+        ends = [secs(e.split(",")[2]) for e in events(ass)]
+        assert max(ends) <= 2.45 + 0.01                                    # nothing in the last 0.25 s
 
 
 if __name__ == "__main__":
